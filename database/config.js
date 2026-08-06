@@ -11,16 +11,23 @@ const dbConfig = {
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || '',
     port: process.env.DB_PORT || 3306,
+    // Read/write MySQL DATETIME values consistently as Indian Standard Time.
+    timezone: '+05:30',
     waitForConnections: true,
     connectionLimit: 10,
-    queueLimit: 0,
-    acquireTimeout: 60000,
-    timeout: 60000,
-    reconnect: true
+    queueLimit: 0
 };
 
 // Create connection pool
 export const pool = mysql.createPool(dbConfig);
+
+// MySQL functions such as NOW() and TIMESTAMP conversions use the session
+// timezone. Apply IST to every physical connection created by the pool.
+pool.on('connection', connection => {
+    connection.query("SET time_zone = '+05:30'", error => {
+        if (error) console.error('❌ Failed to set MySQL session timezone to IST:', error.message);
+    });
+});
 
 // Test database connection
 export async function testConnection() {

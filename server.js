@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 dotenv.config();
+process.env.TZ = 'Asia/Kolkata';
 
 import express from 'express';
 import fs from 'fs';

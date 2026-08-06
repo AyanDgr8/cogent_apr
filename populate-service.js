@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 
 dotenv.config();
+process.env.TZ = 'Asia/Kolkata';
 
 // Default configuration
 const DEFAULT_INTERVAL_MINUTES = 5;
@@ -111,26 +112,24 @@ async function checkAgentTables() {
   return counts;
 }
 
-// Function to calculate time range based on current hour in Dubai timezone
+// Function to calculate time range based on current hour in IST
 function calculateTimeRange() {
   const now = Date.now(); // Current timestamp in milliseconds
   
-  // Dubai is UTC+4
-  const dubaiOffsetMs = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+  // IST is UTC+5:30
+  const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
   
-  // Get current time in Dubai
-  const dubaiTimeMs = now + dubaiOffsetMs;
-  const dubaiDate = new Date(dubaiTimeMs);
+  const istTimeMs = now + istOffsetMs;
+  const istDate = new Date(istTimeMs);
   
-  // Get the current hour in Dubai (0-23)
-  const dubaiHour = dubaiDate.getUTCHours();
+  const istHour = istDate.getUTCHours();
   
-  // Create start of current hour in Dubai
+  // Create start of current hour in IST
   const currentHourStart = new Date(Date.UTC(
-    dubaiDate.getUTCFullYear(),
-    dubaiDate.getUTCMonth(),
-    dubaiDate.getUTCDate(),
-    dubaiHour,
+    istDate.getUTCFullYear(),
+    istDate.getUTCMonth(),
+    istDate.getUTCDate(),
+    istHour,
     0,
     0,
     0
@@ -139,15 +138,15 @@ function calculateTimeRange() {
   const currentHourEnd = new Date(currentHourStart.getTime() + (60 * 60 * 1000)); // Add 1 hour
   
   // Convert to UTC timestamps (in seconds for API)
-  const startTime = Math.floor((currentHourStart.getTime() - dubaiOffsetMs) / 1000);
-  const endTime = Math.floor((currentHourEnd.getTime() - dubaiOffsetMs) / 1000);
+  const startTime = Math.floor((currentHourStart.getTime() - istOffsetMs) / 1000);
+  const endTime = Math.floor((currentHourEnd.getTime() - istOffsetMs) / 1000);
   
   log(`🔍 DEBUG: Current time calculation:`);
   log(`   - System time (UTC): ${new Date(now).toISOString()}`);
-  log(`   - Dubai time: ${dubaiDate.toISOString()}`);
-  log(`   - Dubai hour: ${dubaiHour}`);
-  log(`   - Dubai hour start: ${currentHourStart.toISOString()}`);
-  log(`   - Dubai hour end: ${currentHourEnd.toISOString()}`);
+  log(`   - IST time: ${new Date(now).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+  log(`   - IST hour: ${istHour}`);
+  log(`   - IST hour start: ${formatTimestamp(startTime)}`);
+  log(`   - IST hour end: ${formatTimestamp(endTime)}`);
   log(`   - UTC hour start: ${new Date(startTime * 1000).toISOString()} (${startTime})`);
   log(`   - UTC hour end: ${new Date(endTime * 1000).toISOString()} (${endTime})`);
   
@@ -157,8 +156,8 @@ function calculateTimeRange() {
 
 // Function to format timestamp for display
 function formatTimestamp(timestamp) {
-  return new Date(timestamp * 1000).toLocaleString('en-AE', {
-    timeZone: 'Asia/Dubai',
+  return new Date(timestamp * 1000).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
     day: '2-digit',
     month: '2-digit', 
     year: 'numeric',
@@ -242,7 +241,7 @@ async function populateMeydanDatabase() {
     const nextRunTime = new Date(Date.now() + (config.intervalMinutes * 60 * 1000));
     
     log(`🎉 Meydan agent database population completed successfully in ${duration}s!`, 'success');
-    log(`📅 Next population scheduled for: ${nextRunTime.toLocaleString('en-AE', { timeZone: 'Asia/Dubai' })} (in ${config.intervalMinutes} minutes)`, 'success');
+    log(`📅 Next population scheduled for: ${nextRunTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST (in ${config.intervalMinutes} minutes)`, 'success');
     
     // Update status file with last successful run
     updateStatusFile({
@@ -408,8 +407,8 @@ async function runService() {
 function scheduleNextRun() {
   const intervalMs = config.intervalMinutes * 60 * 1000;
   const nextRunTime = new Date(Date.now() + intervalMs);
-  const dubaiTime = nextRunTime.toLocaleString('en-AE', { 
-    timeZone: 'Asia/Dubai',
+  const istTime = nextRunTime.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
     day: '2-digit',
     month: '2-digit', 
     year: 'numeric',
@@ -418,12 +417,12 @@ function scheduleNextRun() {
     second: '2-digit'
   });
   
-  log(`⏰ Next Meydan population scheduled for: ${dubaiTime} Dubai time (in ${config.intervalMinutes} minutes)`, 'success');
+  log(`⏰ Next population scheduled for: ${istTime} IST (in ${config.intervalMinutes} minutes)`, 'success');
   
   // Update status file with next run time
   updateStatusFile({
     nextRun: nextRunTime.toISOString(),
-    nextRunDubai: dubaiTime,
+    nextRunIST: istTime,
     status: 'waiting_for_next_run'
   });
   

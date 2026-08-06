@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 
 dotenv.config();
+process.env.TZ = 'Asia/Kolkata';
 
 // Configuration
 const LOG_FILE = path.join(process.cwd(), 'populate-service-hourly.log');

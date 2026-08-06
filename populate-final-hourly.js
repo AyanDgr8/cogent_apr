@@ -30,6 +30,7 @@ import {
 import { TENANT_CONFIG } from './tenantConfig.js';
 
 dotenv.config();
+process.env.TZ = 'Asia/Kolkata';
 
 /**
  * Progressive loading function for agent stats to handle large datasets

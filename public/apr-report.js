@@ -3,6 +3,7 @@
 
 // Extract tenant from URL path (e.g., /thriveco -> 'thriveco')
 const CURRENT_TENANT = window.location.pathname.split('/')[1] || null;
+const REPORT_TIMEZONE = 'Asia/Kolkata';
 
 // Tenant display names mapping - will be populated from API
 let TENANT_NAMES = {};
@@ -258,9 +259,18 @@ document.addEventListener('DOMContentLoaded', async function() {
                 return;
             }
 
-            // Convert datetime-local to Unix timestamps (as-is, no timezone conversion)
-            const startTimestamp = Math.floor(new Date(startDate).getTime() / 1000);
-            const endTimestamp = Math.floor(new Date(endDate).getTime() / 1000);
+            // datetime-local has no timezone. Always interpret report inputs as IST,
+            // regardless of the timezone configured on the viewer's computer.
+            const startDateTime = luxon.DateTime.fromISO(startDate, { zone: REPORT_TIMEZONE });
+            const endDateTime = luxon.DateTime.fromISO(endDate, { zone: REPORT_TIMEZONE });
+
+            if (!startDateTime.isValid || !endDateTime.isValid) {
+                showError('Please enter valid IST start and end dates');
+                return;
+            }
+
+            const startTimestamp = Math.floor(startDateTime.toSeconds());
+            const endTimestamp = Math.floor(endDateTime.toSeconds());
             
             console.log('Using Progressive Loading - Start:', startTimestamp, 'End:', endTimestamp);
 
@@ -654,8 +664,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (startDate && endDate) {
             // Convert datetime-local format to readable date format
             const formatDate = (dateTimeStr) => {
-                const date = new Date(dateTimeStr);
-                return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+                return luxon.DateTime.fromISO(dateTimeStr, { zone: REPORT_TIMEZONE }).toFormat('yyyy-MM-dd');
             };
             
             const startFormatted = formatDate(startDate);
@@ -663,7 +672,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             filename = `apr_report_${startFormatted}_to_${endFormatted}`;
         } else {
             // Fallback to current date if no dates selected
-            filename = `apr_report_${new Date().toISOString().split('T')[0]}`;
+            filename = `apr_report_${luxon.DateTime.now().setZone(REPORT_TIMEZONE).toFormat('yyyy-MM-dd')}`;
         }
 
         // Download file
@@ -749,25 +758,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         stats.classList.add('is-hidden');
     }
 
-    // Initialize date inputs with current day
-    const now = new Date();
-    
-    // Create start and end of day
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
-    
-    // Format for datetime-local input
-    const formatForInput = (date) => {
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        return `${year}-${month}-${day}T${hours}:${minutes}`;
-    };
-    
-    document.getElementById('start').value = formatForInput(startOfDay);
-    document.getElementById('end').value = formatForInput(endOfDay);
+    // Initialize the date inputs to the current calendar day in IST.
+    const nowIST = luxon.DateTime.now().setZone(REPORT_TIMEZONE);
+    document.getElementById('start').value = nowIST.startOf('day').toFormat("yyyy-MM-dd'T'HH:mm");
+    document.getElementById('end').value = nowIST.endOf('day').toFormat("yyyy-MM-dd'T'HH:mm");
 });

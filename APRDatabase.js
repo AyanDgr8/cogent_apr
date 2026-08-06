@@ -20,6 +20,7 @@ const DB_CONFIG = {
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || 'Ayan@1012',
   port: parseInt(process.env.DB_PORT) || 3306,
+  timezone: '+05:30',
   multipleStatements: true
 };
 
@@ -137,6 +138,7 @@ async function main() {
   const conn = await mysql.createConnection(DB_CONFIG);
 
   try {
+    await conn.query("SET time_zone = '+05:30'");
     // 1. Create database
     console.log(`\n📦 Ensuring database ${DB_NAME} exists...`);
     await conn.query(
