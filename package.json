@@ -1,0 +1,40 @@
+{
+  "name": "apr",
+  "version": "1.0.0",
+  "main": "cdrFetcher.js",
+  "type": "module",
+  "scripts": {
+    "start": "NODE_OPTIONS=--max_old_space_size=4096 concurrently \"npm:server\" \"npm:populate\"",
+    "server": "node server.js",
+    "populate": "node populate-service.js 5",
+    "access": "node -r dotenv/config accessToken.js",
+    "cdrs": "node -r dotenv/config cdrFetcher.js",
+    "reports": "node -r dotenv/config reportFetcher.js",
+    "agents": "node -r dotenv/config agentStatus.js",
+    "dev": "nodemon server.js",
+    "server-only": "node server.js",
+    "populate-only": "node populate-service.js 5",
+    "start-safe": "NODE_OPTIONS=--max_old_space_size=4096 concurrently --restart-tries 3 \"npm:server\" \"npm:populate\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "bcrypt": "^6.0.0",
+    "concurrently": "^8.2.2",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "http-proxy-middleware": "^3.0.5",
+    "jsonwebtoken": "^9.0.2",
+    "ms": "^2.1.3",
+    "mysql2": "^3.14.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
+
+
