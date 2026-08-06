@@ -120,7 +120,7 @@
 
     .live-pill {
       position: absolute; z-index: 2; right: 32px; top: 32px;
-      display: inline-flex; align-items: center; gap: 9px;
+      display: inline-flex; align-items: flex-start; flex-direction: column; gap: 5px;
       padding: 9px 13px;
       border: 1px solid rgba(255,255,255,.14);
       border-radius: 999px;
@@ -130,6 +130,8 @@
       font-size: 12px; font-weight: 700;
     }
 
+    .workspace-label { display: flex; align-items: center; gap: 9px; }
+    .workspace-tenant { padding-left: 17px; color: #8fe7f5; font: 800 11px Manrope, sans-serif; letter-spacing: .04em; text-transform: lowercase; }
     .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #37e6a1; box-shadow: 0 0 0 5px rgba(55,230,161,.13); }
 
     .filter-card {
@@ -299,12 +301,15 @@
   <main class="app-shell">
     <div class="top-panel">
     <section class="hero">
-      <div class="live-pill"><span class="live-dot"></span> Reporting workspace</div>
+      <div class="live-pill">
+        <div class="workspace-label"><span class="live-dot"></span><span>Reporting workspace</span></div>
+        <div class="workspace-tenant">· <span id="tenantName">Loading…</span></div>
+      </div>
       <div class="brand-row">
         <div class="brand-mark"><img src="/uploads/MultyLogo.png" alt="Multycomm" /></div>
         <div>
           <p class="eyebrow">Operations intelligence</p>
-          <h1>Agent Performance Report · <span id="tenantName">Loading…</span></h1>
+          <h1>Agent Performance Report</h1>
           <p class="hero-copy">Clear, hourly insight into calls, availability and agent productivity.</p>
         </div>
       </div>
