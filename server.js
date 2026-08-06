@@ -3,9 +3,7 @@ dotenv.config();
 process.env.TZ = 'Asia/Kolkata';
 
 import express from 'express';
-import fs from 'fs';
 import https from 'https';
-import http from 'http';
 import { generateEnhancedAgentReport, fetchAgentEvents } from './agentEvents.js';
 import { fetchAgentStatus } from './agentStatus.js';
 import { pool } from './database/config.js';
@@ -19,34 +17,8 @@ import {
 import { generateHourlyTimeSlots } from './utils/hourlyTimeSlots.js';
 import { TENANT_CONFIG, getAllTenants, getTenantConfig } from './tenantConfig.js';
 
-// // SSL Certificate Management
-// const loadSSLCertificates = () => {
-//   try {
-//     const sslOptions = {
-//       key: fs.readFileSync('ssl/privkey.pem'),
-//       cert: fs.readFileSync('ssl/fullchain.pem')
-//     };
-    
-//     console.log("🔒 SSL certificates loaded successfully");
-//     return sslOptions;
-//   } catch (error) {
-//     console.error("❌ Error loading SSL certificates:", error.message);
-    
-//     // Check if SSL files exist
-//     const sslFiles = ['ssl/privkey.pem', 'ssl/fullchain.pem'];
-//     sslFiles.forEach(file => {
-//       if (!fs.existsSync(file)) {
-//         console.error(`❌ SSL file not found: ${file}`);
-//       }
-//     });
-    
-//     console.log("⚠️  Falling back to HTTP server");
-//     return null;
-//   }
-// };
-
-// NOTE: In production behind Nginx, TLS should terminate at the reverse proxy.
-// Enable direct Node HTTPS only when explicitly required.
+// Match CDR deployment: Node serves HTTP internally and Nginx terminates TLS.
+// Do not load the certificates in APR while it is behind the reverse proxy.
 const sslOptions = null;
 
 const app = express();
@@ -1221,7 +1193,7 @@ app.get('/api/tenant/config', async (req, res) => {
     }
 });
 
-// Only use HTTPS if PUBLIC_URL starts with https://
+// Retained for parity with CDR; sslOptions is null in the Nginx deployment.
 const useHTTPS = PUBLIC_URL.startsWith('https://');
 
 if (sslOptions && useHTTPS) {
@@ -1260,51 +1232,3 @@ if (sslOptions && useHTTPS) {
     process.exit(1);
   });
 }
-
-
-// // Only use HTTPS when explicitly enabled for direct Node termination.
-// const useHTTPS = process.env.ENABLE_NODE_HTTPS === 'true';
-
-// if (sslOptions && useHTTPS) {
-//   const server = https.createServer(sslOptions, app);
-//   server.listen(PORT, HOST, () => {
-//     console.log(`🔐 HTTPS server running at ${PUBLIC_URL}`);
-//     console.log(`🌐 Server accessible on all network interfaces (${HOST}:${PORT})`);
-//   });
-  
-//   server.on('error', (err) => {
-//     console.error('❌ HTTPS Server error:', err);
-//     if (err.code === 'EADDRINUSE') {
-//       console.error(`❌ Port ${PORT} is already in use. Try a different port.`);
-//     } else if (err.code === 'EACCES') {
-//       console.error(`❌ Permission denied. Port ${PORT} might require sudo privileges.`);
-//     }
-//     process.exit(1);
-//   });
-// } else {
-//   const server = app.listen(PORT, HOST, () => {
-//     console.log(`🌐 HTTP server running at ${PUBLIC_URL}`);
-//     console.log(`⚠️  Running in HTTP mode (TLS expected via Nginx/reverse proxy)`);
-//   });
-  
-//   server.on('error', (err) => {
-//     console.error('❌ HTTP Server error:', err);
-//     if (err.code === 'EADDRINUSE') {
-//       console.error(`❌ Port ${PORT} is already in use. Try a different port.`);
-//     } else if (err.code === 'EACCES') {
-//       console.error(`❌ Permission denied. Port ${PORT} might require sudo privileges.`);
-//     }
-//     process.exit(1);
-//   });
-// }
-
-// // Graceful shutdown handlers
-// process.on('SIGINT', () => {
-//   console.log('\n⚠️ Received SIGINT (Ctrl+C). Shutting down gracefully...');
-//   process.exit(0);
-// });
-
-// process.on('SIGTERM', () => {
-//   console.log('\n⚠️ Received SIGTERM. Shutting down gracefully...');
-//   process.exit(0);
-// });
