@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>APR Report Login</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 10% 10%, #2168a880, transparent 34%), radial-gradient(circle at 90% 88%, #ef6f5340, transparent 28%), linear-gradient(145deg, #061121, #102b4a); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #17243a; -webkit-font-smoothing: antialiased; }
+    .shell { width: min(100%, 960px); min-height: 570px; display: grid; grid-template-columns: 1.06fr .94fr; overflow: hidden; border: 1px solid #ffffff26; border-radius: 28px; background: #fff; box-shadow: 0 36px 110px #0008, 0 1px 0 #ffffff40 inset; }
+    .brand { position: relative; display: flex; flex-direction: column; justify-content: space-between; padding: 46px; overflow: hidden; color: #fff; background: linear-gradient(145deg, #102f55, #0b1930 75%); }
+    .brand::before { content: ""; position: absolute; inset: 0; opacity: .14; background-image: linear-gradient(#ffffff12 1px, transparent 1px), linear-gradient(90deg, #ffffff12 1px, transparent 1px); background-size: 38px 38px; mask-image: linear-gradient(to bottom right, #000, transparent 72%); }
+    .brand::after { content: ""; position: absolute; right: -100px; bottom: -130px; width: 350px; height: 350px; border-radius: 46% 54% 65% 35%; background: linear-gradient(135deg, #1976d299, #ef6f5366); filter: blur(2px); transform: rotate(18deg); }
+    .logo { position: relative; z-index: 1; width: 250px; max-width: 100%; height: auto; padding: 10px 14px; border-radius: 12px; background: #fff; box-shadow: 0 10px 28px #0003; }
+    .copy { position: relative; z-index: 1; max-width: 360px; }
+    .eyebrow { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; color: #a9d5ff; font-size: 11px; font-weight: 800; letter-spacing: .19em; text-transform: uppercase; }
+    .eyebrow::before { content: ""; width: 28px; height: 2px; border-radius: 2px; background: #ef6f53; }
+    h2 { margin: 0 0 16px; font-size: clamp(31px, 4vw, 46px); font-weight: 760; line-height: 1.07; letter-spacing: -.045em; }
+    .copy p { margin: 0; color: #c2cede; font-size: 15px; line-height: 1.7; }
+    .footer { position: relative; z-index: 1; color: #90a3bb; font-size: 12px; }
+    .login { display: flex; align-items: center; padding: 58px 50px; background: linear-gradient(165deg, #fff 0%, #f7faff 100%); }
+    .card { width: 100%; max-width: 360px; margin: auto; }
+    .lock { width: 50px; height: 50px; display: grid; place-items: center; margin-bottom: 24px; border-radius: 15px; color: #fff; background: linear-gradient(135deg, #2689e8, #1059a2); box-shadow: 0 12px 26px #1976d247; }
+    .lock svg { width: 23px; }
+    h1 { margin: 0 0 9px; color: #0b1930; font-size: 32px; font-weight: 760; letter-spacing: -.035em; }
+    .subtitle { margin: 0 0 30px; color: #64748b; font-size: 14px; line-height: 1.55; }
+    label { display: block; margin-bottom: 9px; color: #334155; font-size: 12px; font-weight: 750; letter-spacing: .035em; }
+    .input-wrap { position: relative; }
+    input { width: 100%; height: 54px; padding: 0 52px 0 16px; border: 1px solid #d9e2ee; border-radius: 12px; background: #f8fafc; color: #17243a; font: inherit; font-size: 15px; transition: .2s ease; }
+    input:focus { outline: none; border-color: #1976d2; box-shadow: 0 0 0 4px #1976d21c; }
+    .eye { position: absolute; top: 50%; right: 8px; width: 40px; min-height: 40px; display: grid; place-items: center; margin: 0; padding: 0; border: 0; border-radius: 9px; background: transparent; color: #718197; box-shadow: none; transform: translateY(-50%); }
+    .eye:hover { background: #e9f1fa; color: #1976d2; }
+    .eye svg { width: 20px; height: 20px; }
+    .submit { width: 100%; min-height: 52px; margin-top: 22px; border: 0; border-radius: 12px; background: linear-gradient(110deg, #2384df, #125b9f); color: #fff; font: inherit; font-weight: 750; letter-spacing: .01em; cursor: pointer; box-shadow: 0 12px 25px #1976d238; transition: transform .2s, box-shadow .2s; }
+    .submit:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 16px 30px #1976d250; }
+    button:disabled { opacity: .7; cursor: wait; }
+    #error { min-height: 21px; margin-top: 13px; color: #c0392b; font-size: 13px; font-weight: 600; }
+    .secure { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 4px; color: #8492a6; font-size: 11px; font-weight: 600; }
+    .secure svg { width: 14px; }
+    @media (max-width: 740px) { .shell { grid-template-columns: 1fr; } .brand { min-height: 220px; padding: 28px; } .logo { width: 210px; } .copy p, .footer { display: none; } .login { padding: 34px 28px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="brand" aria-label="Multycomm APR portal">
+      <img class="logo" src="/report-login-logo" alt="Multycomm" />
+      <div class="copy"><div class="eyebrow">APR reports portal</div><h2>Agent performance, clearly understood.</h2><p>Secure access to performance reports, operational insights, and agent activity tools.</p></div>
+      <div class="footer">© 2026 Multycomm. All rights reserved.</div>
+    </section>
+    <section class="login"><div class="card">
+      <div class="lock" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+      <h1>Welcome back</h1>
+      <p class="subtitle">Enter your secure APR report password to continue.</p>
+      <form id="loginForm"><label for="password">REPORT PASSWORD</label><div class="input-wrap"><input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required autofocus /><button class="eye" id="togglePassword" type="button" aria-label="Show password" title="Show password"><svg id="eyeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div><button class="submit" id="submitButton" type="submit">Unlock report</button><div id="error" role="alert" aria-live="polite"></div></form>
+      <div class="secure"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>Protected and encrypted access</div>
+    </div></section>
+  </main>
+  <script>
+    const form = document.getElementById('loginForm');
+    const button = document.getElementById('submitButton');
+    const errorBox = document.getElementById('error');
+    const passwordInput = document.getElementById('password');
+    const togglePassword = document.getElementById('togglePassword');
+    togglePassword.addEventListener('click', () => {
+      const hidden = passwordInput.type === 'password';
+      passwordInput.type = hidden ? 'text' : 'password';
+      togglePassword.setAttribute('aria-label', hidden ? 'Hide password' : 'Show password');
+      togglePassword.title = hidden ? 'Hide password' : 'Show password';
+      passwordInput.focus();
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault(); button.disabled = true; button.textContent = 'Verifying…'; errorBox.textContent = '';
+      try {
+        const response = await fetch('/api/report-access/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: form.password.value }) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Unable to sign in');
+        location.replace('/hth');
+      } catch (error) { errorBox.textContent = error.message; form.password.select(); }
+      finally { button.disabled = false; button.textContent = 'Unlock report'; }
+    });
+  </script>
+</body>
+</html>

@@ -1,15 +1,15 @@
 {
-  "serviceStarted": "2026-08-06T12:05:52.523Z",
+  "serviceStarted": "2026-08-07T08:29:01.430Z",
   "status": "stopped",
   "config": {
     "intervalMinutes": 5
   },
-  "lastUpdated": "2026-08-06T12:06:02.291Z",
-  "lastRun": "2026-08-06T12:05:52.618Z",
-  "error": "Database connection failed",
-  "stack": "Error: Database connection failed\n    at populateMeydanDatabase (file:///Users/mac/Desktop/cogent/APR/populate-service.js:181:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async runService (file:///Users/mac/Desktop/cogent/APR/populate-service.js:396:5)\n    at async file:///Users/mac/Desktop/cogent/APR/populate-service.js:493:3",
-  "nextRun": "2026-08-06T12:10:52.618Z",
-  "nextRunIST": "06/08/2026, 05:40:52 pm",
+  "lastUpdated": "2026-08-07T08:29:33.761Z",
+  "lastRun": "2026-08-07T08:29:01.520Z",
+  "error": "Population function returned false",
+  "stack": "Error: Population function returned false\n    at populateMeydanDatabase (file:///Users/mac/Desktop/cogent/APR/populate-service.js:204:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async runService (file:///Users/mac/Desktop/cogent/APR/populate-service.js:396:5)\n    at async file:///Users/mac/Desktop/cogent/APR/populate-service.js:493:3",
+  "nextRun": "2026-08-07T08:34:01.520Z",
+  "nextRunIST": "07/08/2026, 02:04:01 pm",
   "reason": "SIGINT received",
-  "stoppedAt": "2026-08-06T12:06:02.291Z"
+  "stoppedAt": "2026-08-07T08:29:33.761Z"
 }

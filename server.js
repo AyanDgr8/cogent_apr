@@ -4,6 +4,11 @@ process.env.TZ = 'Asia/Kolkata';
 
 import express from 'express';
 import https from 'https';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import crypto from 'crypto';
+import cookieParser from 'cookie-parser';
+import jwt from 'jsonwebtoken';
 import { generateEnhancedAgentReport, fetchAgentEvents } from './agentEvents.js';
 import { fetchAgentStatus } from './agentStatus.js';
 import { pool } from './database/config.js';
@@ -22,6 +27,7 @@ import { TENANT_CONFIG, getAllTenants, getTenantConfig } from './tenantConfig.js
 const sslOptions = null;
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 9503;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
@@ -43,7 +49,79 @@ setInterval(() => {
 }, 30 * 60 * 1000); // Run every 30 minutes
 
 // Middleware
+app.set('trust proxy', 1);
 app.use(express.json()); // Add JSON parsing middleware for POST requests
+app.use(cookieParser());
+
+const REPORT_PASSWORD = process.env.REPORT_PASSWORD || process.env.Password;
+if (!REPORT_PASSWORD) {
+    throw new Error('APR report password is not configured. Set REPORT_PASSWORD (or Password) in .env.');
+}
+
+const REPORT_ACCESS_COOKIE = 'apr_report_access';
+const DEFAULT_REPORT_TENANT = process.env.DEFAULT_TENANT || getAllTenants()[0];
+const REPORT_ACCESS_SECRET = crypto
+    .createHash('sha256')
+    .update(`apr-report:${REPORT_PASSWORD}`)
+    .digest('hex');
+
+function passwordMatches(candidate) {
+    const expectedHash = crypto.createHash('sha256').update(REPORT_PASSWORD).digest();
+    const candidateHash = crypto.createHash('sha256').update(String(candidate || '')).digest();
+    return crypto.timingSafeEqual(expectedHash, candidateHash);
+}
+
+function hasReportAccess(req) {
+    const token = req.cookies?.[REPORT_ACCESS_COOKIE];
+    if (!token) return false;
+
+    try {
+        const payload = jwt.verify(token, REPORT_ACCESS_SECRET);
+        return payload?.scope === 'apr-report';
+    } catch {
+        return false;
+    }
+}
+
+app.get('/report-login', (req, res) => {
+    if (hasReportAccess(req)) {
+        return res.redirect(`/${DEFAULT_REPORT_TENANT}`);
+    }
+    res.sendFile(path.join(__dirname, 'public', 'report-login.html'));
+});
+
+app.get('/report-login-logo', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'uploads', 'logo.webp'));
+});
+
+app.post('/api/report-access/login', (req, res) => {
+    if (!passwordMatches(req.body?.password)) {
+        return res.status(401).json({ success: false, error: 'Invalid password' });
+    }
+
+    const token = jwt.sign({ scope: 'apr-report' }, REPORT_ACCESS_SECRET, { expiresIn: '12h' });
+    res.cookie(REPORT_ACCESS_COOKIE, token, {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'lax',
+        maxAge: 12 * 60 * 60 * 1000
+    });
+    res.json({ success: true });
+});
+
+app.post('/api/report-access/logout', (req, res) => {
+    res.clearCookie(REPORT_ACCESS_COOKIE, { httpOnly: true, secure: req.secure, sameSite: 'lax' });
+    res.json({ success: true });
+});
+
+app.use((req, res, next) => {
+    if (hasReportAccess(req)) return next();
+    if (req.path.startsWith('/api/')) {
+        return res.status(401).json({ success: false, error: 'Report password required' });
+    }
+
+    res.redirect(`/report-login?returnTo=${encodeURIComponent(`/${DEFAULT_REPORT_TENANT}`)}`);
+});
 
 // Tenant-based routing - serve index.html with tenant context
 app.get('/:tenant', (req, res, next) => {
