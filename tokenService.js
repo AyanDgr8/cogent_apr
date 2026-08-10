@@ -8,7 +8,15 @@ const cache = new Map();        // In prod use Redis
 const MAX_RETRIES = 3;
 
 // Optional: accept self-signed certificates in dev; set NODE_TLS_REJECT_UNAUTHORIZED=1 in prod
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+// keepAlive reuses sockets across the hundreds of requests a populate run makes, which
+// avoids a fresh DNS lookup + TLS handshake per call — the churn that makes the internal
+// resolver intermittently answer ENOTFOUND.
+const httpsAgent = new https.Agent({
+  rejectUnauthorized: false,
+  keepAlive: true,
+  keepAliveMsecs: 30_000,
+  maxSockets: 20
+});
 
 // Cache structure: Map<tenant, {access, refresh, expiresAt}>
 

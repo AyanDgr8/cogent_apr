@@ -12,6 +12,15 @@ import { getApiKeyHeaders, httpsAgent } from './tokenService.js';
 import { TENANT_CONFIG } from './tenantConfig.js';
 
 const MAX_RETRIES = 3;
+const MAX_DISCOVERY_PASSES = 3;
+
+// Errors that mean "the request never reached the server", as opposed to a real HTTP answer.
+const NETWORK_ERROR_CODES = new Set([
+  'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED',
+  'ETIMEDOUT', 'ECONNABORTED', 'EPIPE', 'ERR_SOCKET_CONNECTION_TIMEOUT'
+]);
+
+const isNetworkError = err => !err.response && NETWORK_ERROR_CODES.has(err.code);
 
 /**
  * Filter events to show timestamps where agent state is "available" OR "Logoff" AND enabled is true
@@ -423,55 +432,81 @@ export async function fetchAgentEvents(
   let pageCount = 0;
   const MAX_PAGES = 1000; // Safety limit to prevent infinite loops
 
-  // First, find a working endpoint combination
+  // First, find a working endpoint combination.
+  // A transient network failure (flaky DNS, reset connection) says nothing about whether
+  // an endpoint exists — treating it like a 404 permanently skips the correct path and
+  // makes the whole run fail on the fallbacks, which legitimately 404.
   let endpointFound = false;
-  for (const baseUrl of possibleBaseUrls) {
-    console.log(`\n🌐 Trying base URL: ${baseUrl}`);
-    
-    for (const endpoint of possibleEndpoints) {
-      console.log(`\n🔍 Trying endpoint: ${endpoint}`);
-      
-      for (let i = 0, delay = 1000; i < MAX_RETRIES; i++, delay *= 2) {
-        try {
-          const fullUrl = `${baseUrl}${endpoint}`;
-          console.log(`🔍 Testing API call to: ${fullUrl}`);
-          
-          const testResponse = await axios.get(fullUrl, { 
-            params: { ...params, pageSize: 10 }, // Small test request
-            headers, 
-            timeout: 720000, // Increased to 12 minutes (720 seconds)
-            httpsAgent 
-          });
-          
-          console.log(`✅ API test succeeded with status: ${testResponse.status}`);
-          successfulEndpoint = endpoint;
-          successfulBaseUrl = baseUrl;
-          endpointFound = true;
-          break;
-        } catch (err) {
-          const errorMsg = err.response?.status || err.message;
-          console.error(`❌ Test attempt ${i + 1} failed:`, errorMsg);
-          
-          // For 500 errors, wait longer before retrying
-          if (err.response?.status === 500) {
-            console.log(`🔄 Server error (500) detected, waiting ${delay * 2}ms before retry...`);
-            await new Promise(r => setTimeout(r, delay * 2));
-          } else if (i < MAX_RETRIES - 1) {
-            await new Promise(r => setTimeout(r, delay));
-          }
-          
-          if (i === MAX_RETRIES - 1) {
-            console.log(`❌ All test attempts failed for ${baseUrl}${endpoint}`);
+  for (let pass = 0; pass < MAX_DISCOVERY_PASSES && !endpointFound; pass++) {
+    let sawNetworkError = false;
+
+    for (const baseUrl of possibleBaseUrls) {
+      console.log(`\n🌐 Trying base URL: ${baseUrl}`);
+
+      for (const endpoint of possibleEndpoints) {
+        console.log(`\n🔍 Trying endpoint: ${endpoint}`);
+
+        for (let i = 0, delay = 1000; i < MAX_RETRIES; i++, delay *= 2) {
+          try {
+            const fullUrl = `${baseUrl}${endpoint}`;
+            console.log(`🔍 Testing API call to: ${fullUrl}`);
+
+            const testResponse = await axios.get(fullUrl, {
+              params: { ...params, pageSize: 10 }, // Small test request
+              headers,
+              timeout: 720000, // Increased to 12 minutes (720 seconds)
+              httpsAgent
+            });
+
+            console.log(`✅ API test succeeded with status: ${testResponse.status}`);
+            successfulEndpoint = endpoint;
+            successfulBaseUrl = baseUrl;
+            endpointFound = true;
+            break;
+          } catch (err) {
+            const status = err.response?.status;
+            console.error(`❌ Test attempt ${i + 1} failed:`, status || err.code || err.message);
+
+            // 404 is a definitive "this path does not exist here" — move on immediately
+            // instead of burning the retry budget on a path we know is wrong.
+            if (status === 404) {
+              console.log(`   ↪️  Not available on this deployment (404), trying next path`);
+              break;
+            }
+
+            if (isNetworkError(err)) sawNetworkError = true;
+
+            // For 500 errors, wait longer before retrying
+            if (status === 500) {
+              console.log(`🔄 Server error (500) detected, waiting ${delay * 2}ms before retry...`);
+              await new Promise(r => setTimeout(r, delay * 2));
+            } else if (i < MAX_RETRIES - 1) {
+              await new Promise(r => setTimeout(r, delay));
+            }
+
+            if (i === MAX_RETRIES - 1) {
+              console.log(`❌ All test attempts failed for ${baseUrl}${endpoint}`);
+            }
           }
         }
+
+        if (endpointFound) break;
       }
-      
+
       if (endpointFound) break;
     }
-    
-    if (endpointFound) break;
+
+    // A sweep that failed with network errors proves nothing about the endpoints —
+    // back off and rediscover rather than giving up on a path that may well be correct.
+    if (endpointFound || !sawNetworkError) break;
+
+    if (pass < MAX_DISCOVERY_PASSES - 1) {
+      const backoff = 5000 * (pass + 1);
+      console.log(`\n🌐 Network errors during discovery — retrying full endpoint sweep in ${backoff}ms (pass ${pass + 2}/${MAX_DISCOVERY_PASSES})`);
+      await new Promise(r => setTimeout(r, backoff));
+    }
   }
-  
+
   if (!endpointFound) {
     throw new Error('All endpoint paths failed - no working agent events API found');
   }

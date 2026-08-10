@@ -234,9 +234,14 @@ function extractIndividualCustomStates(customStatesString) {
  */
 function calculateBreakTimesFromAPI(notAvailableDetailedReport, tenant) {
     // Get tenant configuration for productive/non-productive states
-    const tenantConfig = TENANT_CONFIG[tenant] || {};
-    const productiveStates = tenantConfig.productive_states || [];
-    const nonProductiveStates = tenantConfig.non_productive_states || [];
+    const tenantConfig = TENANT_CONFIG[tenant];
+    if (!tenantConfig) {
+        // Without a config every state is unclassified and both break columns silently
+        // come out 00:00:00 — surface it instead of shipping zeros.
+        console.warn(`⚠️ No tenant config for "${tenant}" - break times cannot be classified and will be 00:00:00`);
+    }
+    const productiveStates = tenantConfig?.productive_states || [];
+    const nonProductiveStates = tenantConfig?.non_productive_states || [];
     
     let productiveSeconds = 0;
     let nonProductiveSeconds = 0;
@@ -284,12 +289,26 @@ function calculateBreakTimesFromAPI(notAvailableDetailedReport, tenant) {
 /**
  * Calculate productive and non-productive break times from custom states
  * @param {string} customStatesText - Custom states in format: "State1 (time1 to time2), State2 (time3 to time4), ..."
+ * @param {string} tenant - Tenant name to get configuration
  * @returns {object} - {productiveBreakTime: "HH:MM:SS", nonProductiveBreakTime: "HH:MM:SS"}
  */
-function calculateBreakTimes(customStatesText) {
-    // Define productive and non-productive states based on new schema
-    const productiveStates = ['Training', 'Login', 'Log In', 'Chat', 'Meeting', 'Setup', 'LQ', 'Gallabox', 'Quality Feedback', 'Quality feedback', 'Query CP', 'Query CX', 'Feedback Session', 'Floor Support'];
-    const nonProductiveStates = ['Lunch Break', 'Tea Break', 'Bio', 'Short Break 1', 'Short Break1', 'Short Break 2', 'Short Break2', 'Logoff', 'Downtime'];
+function calculateBreakTimes(customStatesText, tenant) {
+    // Legacy lists, kept only as a fallback for tenants with no configured states.
+    const LEGACY_PRODUCTIVE_STATES = ['Training', 'Login', 'Log In', 'Chat', 'Meeting', 'Setup', 'LQ', 'Gallabox', 'Quality Feedback', 'Quality feedback', 'Query CP', 'Query CX', 'Feedback Session', 'Floor Support'];
+    const LEGACY_NON_PRODUCTIVE_STATES = ['Lunch Break', 'Tea Break', 'Bio', 'Short Break 1', 'Short Break1', 'Short Break 2', 'Short Break2', 'Logoff', 'Downtime'];
+
+    // Classify against the tenant's own states - the legacy lists don't know about
+    // states this deployment actually reports (e.g. "Manual", or plain "lunch").
+    const tenantConfig = TENANT_CONFIG[tenant];
+    if (!tenantConfig) {
+        console.warn(`⚠️ No tenant config for "${tenant}" - falling back to legacy state lists for break classification`);
+    }
+    const productiveStates = tenantConfig?.productive_states?.length
+        ? tenantConfig.productive_states
+        : LEGACY_PRODUCTIVE_STATES;
+    const nonProductiveStates = tenantConfig?.non_productive_states?.length
+        ? tenantConfig.non_productive_states
+        : LEGACY_NON_PRODUCTIVE_STATES;
     
     let productiveSeconds = 0;
     let nonProductiveSeconds = 0;
@@ -876,10 +895,10 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
                         let breakTimes;
                         if (record.rawData && record.rawData.not_available_detailed_report) {
                             // Use new API format with not_available_detailed_report object
-                            breakTimes = calculateBreakTimesFromAPI(record.rawData.not_available_detailed_report);
+                            breakTimes = calculateBreakTimesFromAPI(record.rawData.not_available_detailed_report, tenant);
                         } else {
                             // Fallback to old string format
-                            breakTimes = calculateBreakTimes(record.customStates || '');
+                            breakTimes = calculateBreakTimes(record.customStates || '', tenant);
                         }
                         
                         // Extract individual custom states - try API format first, then fallback to string format

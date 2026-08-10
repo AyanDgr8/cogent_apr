@@ -1,15 +1,15 @@
 {
-  "serviceStarted": "2026-08-07T08:29:01.430Z",
+  "serviceStarted": "2026-08-10T11:27:05.953Z",
   "status": "stopped",
   "config": {
     "intervalMinutes": 5
   },
-  "lastUpdated": "2026-08-07T08:29:33.761Z",
-  "lastRun": "2026-08-07T08:29:01.520Z",
+  "lastUpdated": "2026-08-10T11:33:48.765Z",
+  "lastRun": "2026-08-10T11:32:06.469Z",
   "error": "Population function returned false",
-  "stack": "Error: Population function returned false\n    at populateMeydanDatabase (file:///Users/mac/Desktop/cogent/APR/populate-service.js:204:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async runService (file:///Users/mac/Desktop/cogent/APR/populate-service.js:396:5)\n    at async file:///Users/mac/Desktop/cogent/APR/populate-service.js:493:3",
-  "nextRun": "2026-08-07T08:34:01.520Z",
-  "nextRunIST": "07/08/2026, 02:04:01 pm",
+  "stack": "Error: Population function returned false\n    at populateMeydanDatabase (file:///Users/mac/Desktop/cogent/APR/populate-service.js:204:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async runService (file:///Users/mac/Desktop/cogent/APR/populate-service.js:396:5)",
+  "nextRun": "2026-08-10T11:37:06.470Z",
+  "nextRunIST": "10/08/2026, 05:07:06 pm",
   "reason": "SIGINT received",
-  "stoppedAt": "2026-08-07T08:29:33.761Z"
+  "stoppedAt": "2026-08-10T11:33:48.764Z"
 }
