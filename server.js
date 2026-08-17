@@ -233,13 +233,71 @@ app.get('/api/enhanced-agent-report', async (req, res) => {
     }
 });
 
+// Placeholder row for an hourly slot that has no stored data, so a single-agent
+// report still shows every slot in the selected range
+function buildEmptySlotRow(slot, agentInfo, queryStart, queryEnd) {
+    return {
+        _isEmptySlot: true,
+        agent_name: agentInfo.agent_name,
+        agent_extension: agentInfo.agent_extension,
+        time_slot_label: slot.slotLabel,
+        start_time: slot.startTime,
+        end_time: slot.endTime,
+        slot_start_datetime: slot.startDate.toISOString(),
+        slot_end_datetime: slot.endDate.toISOString(),
+        total_calls: 0,
+        answered_calls: 0,
+        failed_calls: 0,
+        answer_rate_percent: 0,
+        aht: '00:00:00',
+        login_time: '00:00:00',
+        first_login_time: null,
+        last_logout_time: null,
+        not_available_time: '00:00:00',
+        wrap_up_time: '00:00:00',
+        hold_time: '00:00:00',
+        on_call_time: '00:00:00',
+        custom_states: '',
+        custom_state_login: '00:00:00',
+        custom_state_logoff: '00:00:00',
+        custom_state_lunch_break: '00:00:00',
+        custom_state_tea_break: '00:00:00',
+        custom_state_bio: '00:00:00',
+        custom_state_short_break_1: '00:00:00',
+        custom_state_short_break_2: '00:00:00',
+        custom_state_training: '00:00:00',
+        custom_state_chat: '00:00:00',
+        custom_state_meeting: '00:00:00',
+        custom_state_downtime: '00:00:00',
+        custom_state_feedback_session: '00:00:00',
+        custom_state_floor_support: '00:00:00',
+        custom_state_gallabox: '00:00:00',
+        custom_state_lq: '00:00:00',
+        custom_state_quality_feedback: '00:00:00',
+        custom_state_query_cp: '00:00:00',
+        custom_state_query_cx: '00:00:00',
+        custom_state_setup: '00:00:00',
+        productive_break_time: '00:00:00',
+        non_productive_break_time: '00:00:00',
+        idle_time: '00:00:00',
+        report_start_time: queryStart,
+        report_end_time: queryEnd,
+        created_at: new Date(),
+        first_event_time: null,
+        last_event_time: null,
+        has_login_in_slot: false,
+        has_logout_in_slot: false
+    };
+}
+
 // Unified API endpoint for final_apr data with custom states (WITH PAGINATION)
 app.get('/api/unified-apr-report', async (req, res) => {
     try {
         const { tenant, start, end, agent_name, agent_extension, time_slot, page = 1, limit = 1000 } = req.query;
-        
-        const pageNum = parseInt(page);
-        const limitNum = parseInt(limit);
+
+        const MAX_PAGE_SIZE = 5000;
+        const pageNum = Math.max(1, parseInt(page) || 1);
+        const limitNum = Math.min(Math.max(1, parseInt(limit) || 1000), MAX_PAGE_SIZE);
         const offset = (pageNum - 1) * limitNum;
         
         console.log('📥 Unified APR Report Request:');
@@ -340,40 +398,71 @@ app.get('/api/unified-apr-report', async (req, res) => {
             queryParams.push(`%${agent_extension}%`);
         }
 
-        // First, get total count for pagination
-        let countQuery = `
-            SELECT COUNT(*) as total
-            FROM ${tableName} 
-            WHERE start_time >= ? AND end_time <= ?
-        `;
-        
-        let countParams = [queryStart, queryEnd];
-        
-        if (agent_name) {
-            countQuery += ' AND agent_name LIKE ?';
-            countParams.push(`%${agent_name}%`);
-        }
-        
-        if (agent_extension) {
-            countQuery += ' AND agent_extension LIKE ?';
-            countParams.push(`%${agent_extension}%`);
-        }
-        
-        const [countResult] = await pool.execute(countQuery, countParams);
-        const totalRecords = countResult[0].total;
-        const totalPages = Math.ceil(totalRecords / limitNum);
-        
-        console.log(`📊 Total records: ${totalRecords}, Total pages: ${totalPages}`);
-
-        // Order by agent name and time slot, then add pagination
         query += ' ORDER BY agent_name, start_time';
-        query += ` LIMIT ${limitNum} OFFSET ${offset}`;
 
-        console.log('🔍 Executing query with params:', queryParams);
-        const [rows] = await pool.execute(query, queryParams);
-        
-        console.log(`📊 Database returned ${rows.length} rows (page ${pageNum}/${totalPages})`);
-        
+        let rows;
+        let totalRecords;
+
+        if (agent_extension) {
+            // When filtering by a single agent extension the report must show every hourly
+            // slot, including slots with no stored row. Build the full slot list first and
+            // paginate over that, otherwise each page would re-add all the missing slots.
+            console.log('🔄 Filling missing hourly slots for agent extension:', agent_extension);
+
+            const [allRows] = await pool.execute(query, queryParams);
+            console.log(`📊 Database returned ${allRows.length} rows for extension ${agent_extension}`);
+
+            const allTimeSlots = generateHourlyTimeSlots(queryStart, queryEnd);
+            console.log(`📅 Generated ${allTimeSlots.length} time slots`);
+
+            const agentInfo = allRows.length > 0 ? {
+                agent_name: allRows[0].agent_name,
+                agent_extension: allRows[0].agent_extension
+            } : {
+                agent_name: 'Unknown Agent',
+                agent_extension: agent_extension
+            };
+
+            const existingRowsMap = new Map();
+            allRows.forEach(row => {
+                existingRowsMap.set(row.start_time, row);
+            });
+
+            const filledRows = allTimeSlots.map(slot => {
+                const existingRow = existingRowsMap.get(slot.startTime);
+                return existingRow || buildEmptySlotRow(slot, agentInfo, queryStart, queryEnd);
+            });
+
+            totalRecords = filledRows.length;
+            rows = filledRows.slice(offset, offset + limitNum);
+            console.log(`✅ Filled rows: ${totalRecords} (added ${totalRecords - allRows.length} missing slots)`);
+        } else {
+            // First, get total count for pagination
+            let countQuery = `
+                SELECT COUNT(*) as total
+                FROM ${tableName}
+                WHERE start_time >= ? AND end_time <= ?
+            `;
+
+            let countParams = [queryStart, queryEnd];
+
+            if (agent_name) {
+                countQuery += ' AND agent_name LIKE ?';
+                countParams.push(`%${agent_name}%`);
+            }
+
+            const [countResult] = await pool.execute(countQuery, countParams);
+            totalRecords = countResult[0].total;
+
+            const pagedQuery = `${query} LIMIT ${limitNum} OFFSET ${offset}`;
+            console.log('🔍 Executing query with params:', queryParams);
+            [rows] = await pool.execute(pagedQuery, queryParams);
+        }
+
+        const totalPages = Math.max(1, Math.ceil(totalRecords / limitNum));
+        console.log(`📊 Total records: ${totalRecords}, Total pages: ${totalPages}`);
+        console.log(`📊 Returning ${rows.length} rows (page ${pageNum}/${totalPages})`);
+
         // Debug: Show what time slots we actually got
         const uniqueTimeSlots = [...new Set(rows.map(row => row.time_slot_label))].sort();
         console.log('Found time slots in database:', uniqueTimeSlots);
@@ -382,15 +471,18 @@ app.get('/api/unified-apr-report', async (req, res) => {
         // Fetch login/logout event timestamps for ALL rows (not just rows with activity)
         // This ensures we capture login/logout events even when agent didn't do any work
         console.log(`🔍 Processing ${rows.length} rows for login/logout events`);
-        
+
         const firstEventMap = new Map();
         const lastEventMap = new Map();
         const hasLoginInSlotMap = new Map();
         const hasLogoutInSlotMap = new Map();
-        
+
         for (const row of rows) {
+            // Synthetic rows stand in for slots with no stored data - nothing to look up
+            if (row._isEmptySlot) continue;
+
             const mapKey = `${row.agent_name}_${row.start_time}`;
-            
+
             try {
                 // Check for LOGIN event (agent_reg with enabled=true OR agent_not_avail_state with state='Login')
                 const [loginEvents] = await pool.execute(`
@@ -467,8 +559,13 @@ app.get('/api/unified-apr-report', async (req, res) => {
 
         // Process each row to enhance custom_states with durations
         const enhancedRows = rows.map(row => {
+            if (row._isEmptySlot) {
+                const { _isEmptySlot, ...emptyRow } = row;
+                return emptyRow;
+            }
+
             let enhancedCustomStates = row.custom_states;
-            
+
             try {
                 // Debug: Log the original custom_states data
                 // console.log('Original custom_states for row:', row.agent_name, row.time_slot_label, ':', row.custom_states);
@@ -519,94 +616,7 @@ app.get('/api/unified-apr-report', async (req, res) => {
             };
         });
 
-        // If filtering by specific agent_extension, ensure all 24 hourly slots are present
-        let finalRows = enhancedRows;
-        if (agent_extension) {
-            console.log('🔄 Filling missing hourly slots for agent extension:', agent_extension);
-            
-            // Generate all 24 hourly slots for the date range
-            const allTimeSlots = generateHourlyTimeSlots(queryStart, queryEnd);
-            console.log(`📅 Generated ${allTimeSlots.length} time slots`);
-            
-            // Get agent info from first row or use extension from query
-            const agentInfo = enhancedRows.length > 0 ? {
-                agent_name: enhancedRows[0].agent_name,
-                agent_extension: enhancedRows[0].agent_extension
-            } : {
-                agent_name: 'Unknown Agent',
-                agent_extension: agent_extension
-            };
-            
-            // Create a map of existing rows by start_time
-            const existingRowsMap = new Map();
-            enhancedRows.forEach(row => {
-                existingRowsMap.set(row.start_time, row);
-            });
-            
-            // Fill in all time slots
-            finalRows = allTimeSlots.map(slot => {
-                const existingRow = existingRowsMap.get(slot.startTime);
-                
-                if (existingRow) {
-                    return existingRow;
-                } else {
-                    // Create empty row for missing slot
-                    return {
-                        agent_name: agentInfo.agent_name,
-                        agent_extension: agentInfo.agent_extension,
-                        time_slot_label: slot.slotLabel,
-                        start_time: slot.startTime,
-                        end_time: slot.endTime,
-                        slot_start_datetime: slot.startDate.toISOString(),
-                        slot_end_datetime: slot.endDate.toISOString(),
-                        total_calls: 0,
-                        answered_calls: 0,
-                        failed_calls: 0,
-                        answer_rate_percent: 0,
-                        aht: '00:00:00',
-                        login_time: '00:00:00',
-                        first_login_time: null,
-                        last_logout_time: null,
-                        not_available_time: '00:00:00',
-                        wrap_up_time: '00:00:00',
-                        hold_time: '00:00:00',
-                        on_call_time: '00:00:00',
-                        custom_states: '',
-                        custom_state_login: '00:00:00',
-                        custom_state_logoff: '00:00:00',
-                        custom_state_lunch_break: '00:00:00',
-                        custom_state_tea_break: '00:00:00',
-                        custom_state_bio: '00:00:00',
-                        custom_state_short_break_1: '00:00:00',
-                        custom_state_short_break_2: '00:00:00',
-                        custom_state_training: '00:00:00',
-                        custom_state_chat: '00:00:00',
-                        custom_state_meeting: '00:00:00',
-                        custom_state_downtime: '00:00:00',
-                        custom_state_feedback_session: '00:00:00',
-                        custom_state_floor_support: '00:00:00',
-                        custom_state_gallabox: '00:00:00',
-                        custom_state_lq: '00:00:00',
-                        custom_state_quality_feedback: '00:00:00',
-                        custom_state_query_cp: '00:00:00',
-                        custom_state_query_cx: '00:00:00',
-                        custom_state_setup: '00:00:00',
-                        productive_break_time: '00:00:00',
-                        non_productive_break_time: '00:00:00',
-                        idle_time: '00:00:00',
-                        report_start_time: queryStart,
-                        report_end_time: queryEnd,
-                        created_at: new Date(),
-                        first_event_time: null,
-                        last_event_time: null,
-                        has_login_in_slot: false,
-                        has_logout_in_slot: false
-                    };
-                }
-            });
-            
-            console.log(`✅ Final rows count: ${finalRows.length} (filled ${finalRows.length - enhancedRows.length} missing slots)`);
-        }
+        const finalRows = enhancedRows;
 
         res.json({
             success: true,

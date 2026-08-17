@@ -5,6 +5,9 @@
 const CURRENT_TENANT = window.location.pathname.split('/')[1] || null;
 const REPORT_TIMEZONE = 'Asia/Kolkata';
 
+// Records requested per API call - the report keeps paging until all records are fetched
+const PAGE_SIZE = 1000;
+
 // Tenant display names mapping - will be populated from API
 let TENANT_NAMES = {};
 
@@ -106,26 +109,52 @@ function formatFirstLoginForCSV(row) {
     return '';
 }
 
+// Index of the last slot with activity per agent, computed in a single backward pass.
+// Scanning ahead per row is O(n^2) and stalls the browser once the report holds tens of
+// thousands of rows, so the result is cached against the dataset it was built from.
+let lastActiveSlotCache = { rows: null, indices: null };
+
+function getLastActiveSlotIndices(allRows) {
+    if (!Array.isArray(allRows)) return null;
+    if (lastActiveSlotCache.rows === allRows) return lastActiveSlotCache.indices;
+
+    const indices = new Set();
+    const seenAgents = new Set();
+
+    for (let i = allRows.length - 1; i >= 0; i--) {
+        const candidate = allRows[i];
+        if (!hasActivity(candidate)) continue;
+
+        const agentKey = `${candidate.agent_name}__${candidate.agent_extension}`;
+        if (seenAgents.has(agentKey)) continue;
+
+        seenAgents.add(agentKey);
+        indices.add(i);
+    }
+
+    lastActiveSlotCache = { rows: allRows, indices };
+    return indices;
+}
+
+function resetLastActiveSlotCache() {
+    lastActiveSlotCache = { rows: null, indices: null };
+}
+
 // Helper function to format last logout time
 // Pass allRows and currentIndex to determine if this is the last active slot
 function formatLastLogout(row, allRows, currentIndex) {
     if (!hasActivity(row)) {
         return 'N/A';
     }
-    
+
     // If there was an actual logout event, show it
     if (row.has_logout_in_slot === true) {
         return row.last_event_time || row.last_logout_time || row.last_logout || 'N/A';
     }
-    
+
     // Check if this is the last slot with activity for this agent
-    const isLastActiveSlot = !allRows.slice(currentIndex + 1).some(futureRow => {
-        if (futureRow.agent_name !== row.agent_name || futureRow.agent_extension !== row.agent_extension) {
-            return false;
-        }
-        return hasActivity(futureRow);
-    });
-    
+    const isLastActiveSlot = getLastActiveSlotIndices(allRows).has(currentIndex);
+
     // If this is the last active slot and we have last_event_time, show it as implicit logout
     if (isLastActiveSlot && row.last_event_time) {
         return row.last_event_time;
@@ -148,13 +177,8 @@ function formatLastLogoutForCSV(row, allRows, currentIndex) {
     
     // Check if this is the last slot with activity for this agent
     if (allRows && currentIndex !== undefined) {
-        const isLastActiveSlot = !allRows.slice(currentIndex + 1).some(futureRow => {
-            if (futureRow.agent_name !== row.agent_name || futureRow.agent_extension !== row.agent_extension) {
-                return false;
-            }
-            return hasActivity(futureRow);
-        });
-        
+        const isLastActiveSlot = getLastActiveSlotIndices(allRows).has(currentIndex);
+
         // If this is the last active slot and we have last_event_time, show it as implicit logout
         if (isLastActiveSlot && row.last_event_time) {
             return row.last_event_time;
@@ -318,22 +342,53 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             // Setup table headers immediately
             setupTableHeaders();
-            
-            // Fetch all data from unified endpoint
-            const response = await axios.get(`/api/unified-apr-report?${params.toString()}`);
-            
-            if (!response.data || !response.data.success) {
-                throw new Error(response.data?.message || 'Failed to fetch data');
+
+            // The API is paginated - keep fetching until every page is retrieved so the
+            // report shows all records, not just the first page
+            const allData = [];
+            let page = 1;
+            let totalPages = 1;
+            let expectedRecords = null;
+
+            while (page <= totalPages) {
+                const pageParams = new URLSearchParams(params);
+                pageParams.set('page', page);
+                pageParams.set('limit', PAGE_SIZE);
+
+                const response = await axios.get(`/api/unified-apr-report?${pageParams.toString()}`);
+
+                if (!response.data || !response.data.success) {
+                    throw new Error(response.data?.message || 'Failed to fetch data');
+                }
+
+                const batch = response.data.data || [];
+                allData.push(...batch);
+
+                const pagination = response.data.pagination;
+                totalPages = pagination?.totalPages || 1;
+                expectedRecords = pagination?.totalRecords ?? null;
+
+                if (loadingEl) {
+                    const progressTotal = expectedRecords !== null ? expectedRecords.toLocaleString() : '?';
+                    loadingEl.textContent = `Fetching data: ${allData.length.toLocaleString()} of ${progressTotal} records...`;
+                }
+                if (statsEl) {
+                    statsEl.textContent = `Fetching ${allData.length.toLocaleString()} records...`;
+                }
+
+                // Stop early if the server returns an empty page (guards against a bad totalPages)
+                if (batch.length === 0) break;
+
+                page++;
             }
-            
-            const allData = response.data.data;
+
             const totalRecords = allData.length;
-            
-            console.log(`Loaded ${totalRecords} records, starting progressive display`);
-            
+
+            console.log(`Loaded ${totalRecords} records across ${page - 1} page(s), starting progressive display`);
+
             // Progressive rendering for better UX
             await renderDataProgressively(allData, totalRecords);
-            
+
         } catch (error) {
             console.error('Error in loadDataWithProgress:', error);
             throw error;
@@ -343,18 +398,21 @@ document.addEventListener('DOMContentLoaded', async function() {
     async function renderDataProgressively(allData, totalRecords) {
         const batchSize = 1000; // Render 1000 records at a time
         let renderedCount = 0;
-        
+
         const loadingEl = document.querySelector('.loading-message');
         const statsEl = document.getElementById('stats');
-        
+
+        currentData = [];
+        resetLastActiveSlotCache();
+
         // Process data in batches for smooth rendering
         for (let i = 0; i < allData.length; i += batchSize) {
             const batch = allData.slice(i, i + batchSize);
             
             // Update progress
             renderedCount += batch.length;
-            const percentComplete = Math.round((renderedCount / totalRecords) * 100);
-            
+            const percentComplete = totalRecords > 0 ? Math.round((renderedCount / totalRecords) * 100) : 100;
+
             if (loadingEl) {
                 loadingEl.textContent = `Rendering: ${renderedCount.toLocaleString()} of ${totalRecords.toLocaleString()} records (${percentComplete}%)`;
             }
@@ -365,14 +423,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             // Append batch to table - pass allData for logout calculation
             appendTableRows(batch, i, allData);
-            
+
             // Add to current data
-            if (i === 0) {
-                currentData = [...batch];
-            } else {
-                currentData.push(...batch);
-            }
-            
+            currentData.push(...batch);
+
             // Small delay to allow UI updates and prevent freezing
             await new Promise(resolve => setTimeout(resolve, 10));
         }
