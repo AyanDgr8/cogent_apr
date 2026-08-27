@@ -1,31 +1,14 @@
-// Unified APR Report JavaScript for Agent Performance Reports
+// Unified APR Report JavaScript for SPC Agent Performance Reports
 // Fetches all data from final_apr table in one unified table
+//
+// TIMEZONE HANDLING:
+// - User input is treated as Dubai time (no conversion)
+// - Database stores timestamps in Dubai timezone
+// - Frontend sends timestamps directly to backend without offset
+// - Backend uses timestamps as-is for database queries
 
-// Extract tenant from URL path (e.g., /thriveco -> 'thriveco')
-const CURRENT_TENANT = window.location.pathname.split('/')[1] || null;
-const REPORT_TIMEZONE = 'Asia/Kolkata';
-
-// Records requested per API call - the report keeps paging until all records are fetched
-const PAGE_SIZE = 1000;
-
-// Tenant display names mapping - will be populated from API
-let TENANT_NAMES = {};
-
-// Helper function to check if a row has any activity
-// Checks standard time fields and call counts
-function hasActivity(row) {
-    const timeFields = ['login_time', 'idle_time', 'on_call_time', 'not_available_time', 'wrap_up_time', 'hold_time'];
-    
-    // Check if any time field has a non-zero value
-    const hasTimeActivity = timeFields.some(field => 
-        row[field] && row[field] !== '00:00:00'
-    );
-    
-    // Check if there are any calls
-    const hasCallActivity = row.total_calls && row.total_calls > 0;
-    
-    return hasTimeActivity || hasCallActivity;
-}
+// Dubai timezone for consistent date handling (same as reference code)
+const TIMEZONE = 'Asia/Dubai';
 
 // Helper function to extract first timestamp from custom_states
 function extractFirstCustomStateTimestamp(customStates) {
@@ -62,7 +45,12 @@ function extractFirstCustomStateTimestamp(customStates) {
 // Uses has_login_in_slot from backend to determine if showing login time or "Already logged in"
 function formatFirstLogin(row) {
     // Check if agent has activity
-    if (!hasActivity(row)) {
+    const hasActivity = (row.login_time && row.login_time !== '00:00:00') ||
+                       (row.idle_time && row.idle_time !== '00:00:00') ||
+                       (row.on_call_time && row.on_call_time !== '00:00:00') ||
+                       (row.total_calls && row.total_calls > 0);
+    
+    if (!hasActivity) {
         return 'N/A';
     }
     
@@ -93,7 +81,12 @@ function escapeCSV(value) {
 
 // Helper function for CSV export - plain text version
 function formatFirstLoginForCSV(row) {
-    if (!hasActivity(row)) {
+    const hasActivity = (row.login_time && row.login_time !== '00:00:00') ||
+                       (row.idle_time && row.idle_time !== '00:00:00') ||
+                       (row.on_call_time && row.on_call_time !== '00:00:00') ||
+                       (row.total_calls && row.total_calls > 0);
+    
+    if (!hasActivity) {
         return '';
     }
     
@@ -109,52 +102,34 @@ function formatFirstLoginForCSV(row) {
     return '';
 }
 
-// Index of the last slot with activity per agent, computed in a single backward pass.
-// Scanning ahead per row is O(n^2) and stalls the browser once the report holds tens of
-// thousands of rows, so the result is cached against the dataset it was built from.
-let lastActiveSlotCache = { rows: null, indices: null };
-
-function getLastActiveSlotIndices(allRows) {
-    if (!Array.isArray(allRows)) return null;
-    if (lastActiveSlotCache.rows === allRows) return lastActiveSlotCache.indices;
-
-    const indices = new Set();
-    const seenAgents = new Set();
-
-    for (let i = allRows.length - 1; i >= 0; i--) {
-        const candidate = allRows[i];
-        if (!hasActivity(candidate)) continue;
-
-        const agentKey = `${candidate.agent_name}__${candidate.agent_extension}`;
-        if (seenAgents.has(agentKey)) continue;
-
-        seenAgents.add(agentKey);
-        indices.add(i);
-    }
-
-    lastActiveSlotCache = { rows: allRows, indices };
-    return indices;
-}
-
-function resetLastActiveSlotCache() {
-    lastActiveSlotCache = { rows: null, indices: null };
-}
-
 // Helper function to format last logout time
 // Pass allRows and currentIndex to determine if this is the last active slot
 function formatLastLogout(row, allRows, currentIndex) {
-    if (!hasActivity(row)) {
+    const hasActivity = (row.login_time && row.login_time !== '00:00:00') ||
+                       (row.idle_time && row.idle_time !== '00:00:00') ||
+                       (row.on_call_time && row.on_call_time !== '00:00:00') ||
+                       (row.total_calls && row.total_calls > 0);
+    
+    if (!hasActivity) {
         return 'N/A';
     }
-
+    
     // If there was an actual logout event, show it
     if (row.has_logout_in_slot === true) {
         return row.last_event_time || row.last_logout_time || row.last_logout || 'N/A';
     }
-
+    
     // Check if this is the last slot with activity for this agent
-    const isLastActiveSlot = getLastActiveSlotIndices(allRows).has(currentIndex);
-
+    const isLastActiveSlot = !allRows.slice(currentIndex + 1).some(futureRow => {
+        if (futureRow.agent_name !== row.agent_name || futureRow.agent_extension !== row.agent_extension) {
+            return false;
+        }
+        return (futureRow.login_time && futureRow.login_time !== '00:00:00') ||
+               (futureRow.idle_time && futureRow.idle_time !== '00:00:00') ||
+               (futureRow.on_call_time && futureRow.on_call_time !== '00:00:00') ||
+               (futureRow.total_calls && futureRow.total_calls > 0);
+    });
+    
     // If this is the last active slot and we have last_event_time, show it as implicit logout
     if (isLastActiveSlot && row.last_event_time) {
         return row.last_event_time;
@@ -166,7 +141,12 @@ function formatLastLogout(row, allRows, currentIndex) {
 
 // Helper function for CSV export - last logout
 function formatLastLogoutForCSV(row, allRows, currentIndex) {
-    if (!hasActivity(row)) {
+    const hasActivity = (row.login_time && row.login_time !== '00:00:00') ||
+                       (row.idle_time && row.idle_time !== '00:00:00') ||
+                       (row.on_call_time && row.on_call_time !== '00:00:00') ||
+                       (row.total_calls && row.total_calls > 0);
+    
+    if (!hasActivity) {
         return '';
     }
     
@@ -177,8 +157,16 @@ function formatLastLogoutForCSV(row, allRows, currentIndex) {
     
     // Check if this is the last slot with activity for this agent
     if (allRows && currentIndex !== undefined) {
-        const isLastActiveSlot = getLastActiveSlotIndices(allRows).has(currentIndex);
-
+        const isLastActiveSlot = !allRows.slice(currentIndex + 1).some(futureRow => {
+            if (futureRow.agent_name !== row.agent_name || futureRow.agent_extension !== row.agent_extension) {
+                return false;
+            }
+            return (futureRow.login_time && futureRow.login_time !== '00:00:00') ||
+                   (futureRow.idle_time && futureRow.idle_time !== '00:00:00') ||
+                   (futureRow.on_call_time && futureRow.on_call_time !== '00:00:00') ||
+                   (futureRow.total_calls && futureRow.total_calls > 0);
+        });
+        
         // If this is the last active slot and we have last_event_time, show it as implicit logout
         if (isLastActiveSlot && row.last_event_time) {
             return row.last_event_time;
@@ -188,25 +176,7 @@ function formatLastLogoutForCSV(row, allRows, currentIndex) {
     return '';
 }
 
-// Fetch available tenants from API
-async function loadTenants() {
-    try {
-        const response = await axios.get('/api/tenants');
-        if (response.data && response.data.success) {
-            // Build tenant names mapping
-            response.data.tenants.forEach(tenant => {
-                TENANT_NAMES[tenant.key] = tenant.name;
-            });
-            return true;
-        }
-        return false;
-    } catch (error) {
-        console.error('Error loading tenants:', error);
-        return false;
-    }
-}
-
-document.addEventListener('DOMContentLoaded', async function() {
+document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('filterForm');
     const fetchBtn = document.getElementById('fetchBtn');
     const loading = document.getElementById('loading');
@@ -214,40 +184,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     const stats = document.getElementById('stats');
     const resultTable = document.getElementById('resultTable');
     const csvBtn = document.getElementById('csvBtn');
-    const tenantNameEl = document.getElementById('tenantName');
 
     let currentData = [];
-
-    // Load tenants from API
-    const tenantsLoaded = await loadTenants();
-    
-    if (!tenantsLoaded) {
-        if (tenantNameEl) {
-            tenantNameEl.textContent = 'Error Loading Tenants';
-            tenantNameEl.style.color = 'red';
-        }
-        showError('Failed to load tenant configuration. Please refresh the page.');
-        fetchBtn.disabled = true;
-        return;
-    }
-
-    // Display tenant name and validate
-    if (!CURRENT_TENANT || !TENANT_NAMES[CURRENT_TENANT]) {
-        if (tenantNameEl) {
-            tenantNameEl.textContent = 'Invalid Tenant';
-            tenantNameEl.style.color = 'red';
-        }
-        showError(`Invalid tenant. Available tenants: ${Object.keys(TENANT_NAMES).join(', ')}`);
-        fetchBtn.disabled = true;
-        return;
-    }
-    
-    if (tenantNameEl) {
-        tenantNameEl.textContent = TENANT_NAMES[CURRENT_TENANT];
-    }
-    
-    // Update page title
-    document.title = `APR - ${TENANT_NAMES[CURRENT_TENANT]}`;
 
     // Form submission handler
     form.addEventListener('submit', async function(e) {
@@ -283,24 +221,22 @@ document.addEventListener('DOMContentLoaded', async function() {
                 return;
             }
 
-            // datetime-local has no timezone. Always interpret report inputs as IST,
-            // regardless of the timezone configured on the viewer's computer.
-            const startDateTime = luxon.DateTime.fromISO(startDate, { zone: REPORT_TIMEZONE });
-            const endDateTime = luxon.DateTime.fromISO(endDate, { zone: REPORT_TIMEZONE });
-
-            if (!startDateTime.isValid || !endDateTime.isValid) {
-                showError('Please enter valid IST start and end dates');
-                return;
-            }
-
-            const startTimestamp = Math.floor(startDateTime.toSeconds());
-            const endTimestamp = Math.floor(endDateTime.toSeconds());
+            // Convert datetime-local to Unix timestamps treating input as Dubai time
+            const parseAsDubaiTime = (dateTimeString) => {
+                const localDate = new Date(dateTimeString);
+                const dubaiDate = new Date(localDate.toLocaleString('en-US', {timeZone: TIMEZONE}));
+                const localDateAdjusted = new Date(localDate.toLocaleString('en-US'));
+                const offset = localDateAdjusted.getTime() - dubaiDate.getTime();
+                return new Date(localDate.getTime() + offset);
+            };
+            
+            const startTimestamp = Math.floor(parseAsDubaiTime(startDate).getTime() / 1000);
+            const endTimestamp = Math.floor(parseAsDubaiTime(endDate).getTime() / 1000);
             
             console.log('Using Progressive Loading - Start:', startTimestamp, 'End:', endTimestamp);
 
             // Initialize progressive loading
             const initParams = new URLSearchParams({
-                tenant: CURRENT_TENANT,
                 start: startTimestamp,
                 end: endTimestamp
             });
@@ -342,53 +278,22 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             // Setup table headers immediately
             setupTableHeaders();
-
-            // The API is paginated - keep fetching until every page is retrieved so the
-            // report shows all records, not just the first page
-            const allData = [];
-            let page = 1;
-            let totalPages = 1;
-            let expectedRecords = null;
-
-            while (page <= totalPages) {
-                const pageParams = new URLSearchParams(params);
-                pageParams.set('page', page);
-                pageParams.set('limit', PAGE_SIZE);
-
-                const response = await axios.get(`/api/unified-apr-report?${pageParams.toString()}`);
-
-                if (!response.data || !response.data.success) {
-                    throw new Error(response.data?.message || 'Failed to fetch data');
-                }
-
-                const batch = response.data.data || [];
-                allData.push(...batch);
-
-                const pagination = response.data.pagination;
-                totalPages = pagination?.totalPages || 1;
-                expectedRecords = pagination?.totalRecords ?? null;
-
-                if (loadingEl) {
-                    const progressTotal = expectedRecords !== null ? expectedRecords.toLocaleString() : '?';
-                    loadingEl.textContent = `Fetching data: ${allData.length.toLocaleString()} of ${progressTotal} records...`;
-                }
-                if (statsEl) {
-                    statsEl.textContent = `Fetching ${allData.length.toLocaleString()} records...`;
-                }
-
-                // Stop early if the server returns an empty page (guards against a bad totalPages)
-                if (batch.length === 0) break;
-
-                page++;
+            
+            // Fetch all data from unified endpoint
+            const response = await axios.get(`/api/unified-apr-report?${params.toString()}`);
+            
+            if (!response.data || !response.data.success) {
+                throw new Error(response.data?.message || 'Failed to fetch data');
             }
-
+            
+            const allData = response.data.data;
             const totalRecords = allData.length;
-
-            console.log(`Loaded ${totalRecords} records across ${page - 1} page(s), starting progressive display`);
-
+            
+            console.log(`Loaded ${totalRecords} records, starting progressive display`);
+            
             // Progressive rendering for better UX
             await renderDataProgressively(allData, totalRecords);
-
+            
         } catch (error) {
             console.error('Error in loadDataWithProgress:', error);
             throw error;
@@ -398,21 +303,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     async function renderDataProgressively(allData, totalRecords) {
         const batchSize = 1000; // Render 1000 records at a time
         let renderedCount = 0;
-
+        
         const loadingEl = document.querySelector('.loading-message');
         const statsEl = document.getElementById('stats');
-
-        currentData = [];
-        resetLastActiveSlotCache();
-
+        
         // Process data in batches for smooth rendering
         for (let i = 0; i < allData.length; i += batchSize) {
             const batch = allData.slice(i, i + batchSize);
             
             // Update progress
             renderedCount += batch.length;
-            const percentComplete = totalRecords > 0 ? Math.round((renderedCount / totalRecords) * 100) : 100;
-
+            const percentComplete = Math.round((renderedCount / totalRecords) * 100);
+            
             if (loadingEl) {
                 loadingEl.textContent = `Rendering: ${renderedCount.toLocaleString()} of ${totalRecords.toLocaleString()} records (${percentComplete}%)`;
             }
@@ -423,10 +325,14 @@ document.addEventListener('DOMContentLoaded', async function() {
             
             // Append batch to table - pass allData for logout calculation
             appendTableRows(batch, i, allData);
-
+            
             // Add to current data
-            currentData.push(...batch);
-
+            if (i === 0) {
+                currentData = [...batch];
+            } else {
+                currentData.push(...batch);
+            }
+            
             // Small delay to allow UI updates and prevent freezing
             await new Promise(resolve => setTimeout(resolve, 10));
         }
@@ -518,9 +424,13 @@ document.addEventListener('DOMContentLoaded', async function() {
     function setupTableHeaders() {
         const headers = [
             'S.No.', 'Agent Name', 'Extension', 'Time Slot', 'Total Calls', 'Answered Calls', 
-            'Failed Calls', 'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time', 
+            'Failed Calls', 'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time', 'Available Time',
             'Not Available Time', 'Idle Time', 'Wrap Up Time', 'Hold Time', 'On Call Time', 
-            'Productive Break Time', 'Non-Productive Break Time', 'Custom States'
+            'Productive Break Time', 'Non-Productive Break Time', 'Custom States',
+            'Custom State - Short Break', 'Custom State - Bio Break', 'Custom State - Lunch Break',
+            'Custom State - Logoff', 'Custom State - Meeting', 'Custom State - Training',
+            'Custom State - Ticket B2B', 'Custom State - Ticket B2C', 'Custom State - Chat',
+            'Custom State - Log In'
         ];
 
         const headerHTML = `
@@ -548,7 +458,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             const serialNo = startIndex + batchIndex + 1;
             // Find the actual index in the full dataset
             const actualIndex = allData ? startIndex + batchIndex : batchIndex;
-            
+
             return `
                 <tr>
                     <td>${serialNo}</td>
@@ -562,6 +472,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <td>${formatFirstLogin(row)}</td>
                     <td>${formatLastLogout(row, fullDataset, actualIndex)}</td>
                     <td>${row.login_time || 'N/A'}</td>
+                    <td>${row.available_time || 'N/A'}</td>
                     <td>${row.not_available_time || 'N/A'}</td>
                     <td>${row.idle_time || 'N/A'}</td>
                     <td>${row.wrap_up_time || 'N/A'}</td>
@@ -574,6 +485,16 @@ document.addEventListener('DOMContentLoaded', async function() {
                             ${formatCustomStates(row.custom_states)}
                         </div>
                     </td>
+                    <td>${row.custom_state_short_break || '00:00:00'}</td>
+                    <td>${row.custom_state_bio_break || '00:00:00'}</td>
+                    <td>${row.custom_state_lunch_break || '00:00:00'}</td>
+                    <td>${row.custom_state_logoff || '00:00:00'}</td>
+                    <td>${row.custom_state_meeting || '00:00:00'}</td>
+                    <td>${row.custom_state_training || '00:00:00'}</td>
+                    <td>${row.custom_state_ticket_b2b || '00:00:00'}</td>
+                    <td>${row.custom_state_ticket_b2c || '00:00:00'}</td>
+                    <td>${row.custom_state_chat || '00:00:00'}</td>
+                    <td>${row.custom_state_log_in || '00:00:00'}</td>
                 </tr>
             `;
         }).join('');
@@ -678,9 +599,13 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Add unified headers including S.No. and custom states
         const headers = [
             'S.No.', 'Agent Name', 'Extension', 'Time Slot', 'Total Calls', 'Answered Calls', 
-            'Failed Calls', 'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time', 
-            'Not Available Time','Idle Time', 'Wrap Up Time', 'Hold Time', 'On Call Time', 
-            'Productive Break Time', 'Non-Productive Break Time', 'Custom States'
+            'Failed Calls', 'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time', 'Available Time',
+            'Not Available Time', 'Idle Time', 'Wrap Up Time', 'Hold Time', 'On Call Time', 
+            'Productive Break Time', 'Non-Productive Break Time', 'Custom States',
+            'Custom State - Short Break', 'Custom State - Bio Break', 'Custom State - Lunch Break',
+            'Custom State - Logoff', 'Custom State - Meeting', 'Custom State - Training',
+            'Custom State - Ticket B2B', 'Custom State - Ticket B2C', 'Custom State - Chat',
+            'Custom State - Log In'
         ];
         csvContent += headers.join(',') + '\n';
         
@@ -698,6 +623,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                 escapeCSV(formatFirstLoginForCSV(row)),
                 escapeCSV(formatLastLogoutForCSV(row, currentData, index)),
                 escapeCSV(row.login_time || '00:00:00'),
+                escapeCSV(row.available_time || '00:00:00'),
                 escapeCSV(row.not_available_time || '00:00:00'),
                 escapeCSV(row.idle_time || '00:00:00'),
                 escapeCSV(row.wrap_up_time || '00:00:00'),
@@ -706,6 +632,16 @@ document.addEventListener('DOMContentLoaded', async function() {
                 escapeCSV(row.productive_break_time || '00:00:00'),
                 escapeCSV(row.non_productive_break_time || '00:00:00'),
                 escapeCSV(formatCustomStatesForCSV(row.custom_states)),
+                escapeCSV(row.custom_state_short_break || '00:00:00'),
+                escapeCSV(row.custom_state_bio_break || '00:00:00'),
+                escapeCSV(row.custom_state_lunch_break || '00:00:00'),
+                escapeCSV(row.custom_state_logoff || '00:00:00'),
+                escapeCSV(row.custom_state_meeting || '00:00:00'),
+                escapeCSV(row.custom_state_training || '00:00:00'),
+                escapeCSV(row.custom_state_ticket_b2b || '00:00:00'),
+                escapeCSV(row.custom_state_ticket_b2c || '00:00:00'),
+                escapeCSV(row.custom_state_chat || '00:00:00'),
+                escapeCSV(row.custom_state_log_in || '00:00:00')
             ];
             csvContent += csvRow.join(',') + '\n';
         });
@@ -718,7 +654,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (startDate && endDate) {
             // Convert datetime-local format to readable date format
             const formatDate = (dateTimeStr) => {
-                return luxon.DateTime.fromISO(dateTimeStr, { zone: REPORT_TIMEZONE }).toFormat('yyyy-MM-dd');
+                const date = new Date(dateTimeStr);
+                return date.toISOString().split('T')[0]; // YYYY-MM-DD format
             };
             
             const startFormatted = formatDate(startDate);
@@ -726,7 +663,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             filename = `apr_report_${startFormatted}_to_${endFormatted}`;
         } else {
             // Fallback to current date if no dates selected
-            filename = `apr_report_${luxon.DateTime.now().setZone(REPORT_TIMEZONE).toFormat('yyyy-MM-dd')}`;
+            filename = `apr_report_${new Date().toISOString().split('T')[0]}`;
         }
 
         // Download file
@@ -812,8 +749,28 @@ document.addEventListener('DOMContentLoaded', async function() {
         stats.classList.add('is-hidden');
     }
 
-    // Initialize the date inputs to the current calendar day in IST.
-    const nowIST = luxon.DateTime.now().setZone(REPORT_TIMEZONE);
-    document.getElementById('start').value = nowIST.startOf('day').toFormat("yyyy-MM-dd'T'HH:mm");
-    document.getElementById('end').value = nowIST.endOf('day').toFormat("yyyy-MM-dd'T'HH:mm");
+    // Initialize date inputs with current day (Dubai timezone) - same as reference code
+    const now = new Date();
+    
+    // Get current time in Dubai timezone
+    const dubaiNow = new Date(now.toLocaleString('en-US', {timeZone: TIMEZONE}));
+    
+    // Create start and end of day in Dubai timezone
+    const startOfDay = new Date(dubaiNow);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(dubaiNow);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    // Format for datetime-local input (treating as local time that represents Dubai time)
+    const formatForInput = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return `${year}-${month}-${day}T${hours}:${minutes}`;
+    };
+    
+    document.getElementById('start').value = formatForInput(startOfDay);
+    document.getElementById('end').value = formatForInput(endOfDay);
 });

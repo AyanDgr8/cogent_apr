@@ -118,6 +118,35 @@ async function checkDatabaseConnection() {
   }
 }
 
+// A same-second pair of transitions (e.g. agent_on_call=true with
+// agent_idle=false) must survive ingestion for the clipped state timeline to be
+// reconstructable. The old two-column key silently collapsed them, so refuse to
+// run rather than quietly populate unusable activity data.
+async function validateActivityEventIndex() {
+  const { pool } = await import('./database/config.js');
+  const expected = ['agent_name', 'event_timestamp', 'event_type', 'event_state'];
+  const allTenants = Object.keys(TENANT_CONFIG);
+
+  for (const tenant of allTenants) {
+    const table = `agent_activity_${tenant}`;
+    const [indexes] = await pool.query(
+      `SHOW INDEX FROM ${table} WHERE Key_name = 'unique_agent_activity'`
+    );
+    const columns = indexes
+      .sort((a, b) => a.Seq_in_index - b.Seq_in_index)
+      .map(index => index.Column_name);
+
+    if (columns.join(',') !== expected.join(',')) {
+      throw new Error(
+        `${table} unique index is incompatible (${columns.join(', ') || 'missing'}). ` +
+        `Expected: ${expected.join(', ')}. Run "node update_records.js --migrate-only" first.`
+      );
+    }
+  }
+
+  log('Activity-event uniqueness index supports simultaneous transitions', 'success');
+}
+
 // Check agent tables for data (all tenants)
 async function checkAgentTables() {
   log('Checking agent tables for recent data (last hour)...');
@@ -296,7 +325,9 @@ async function populateOcubeDatabase() {
     if (!dbConnected) {
       throw new Error('Database connection failed');
     }
-    
+
+    await validateActivityEventIndex();
+
     // Step 2: Calculate previous hour time range
     let dbStartTime, dbEndTime, hourStart, hourEnd;
     ({ startTime: dbStartTime, endTime: dbEndTime, hourStart, hourEnd } = calculatePreviousHourTimeRange());

@@ -24,13 +24,12 @@ import {
 } from './database/config.js';
 import { 
     generateHourlyTimeSlots, 
+    timestampToDubaiDate, 
     findTimeSlotForTimestamp,
     groupDataByTimeSlots
 } from './utils/hourlyTimeSlotsFixed.js';
-import { TENANT_CONFIG } from './tenantConfig.js';
 
 dotenv.config();
-process.env.TZ = 'Asia/Kolkata';
 
 /**
  * Progressive loading function for agent stats to handle large datasets
@@ -123,11 +122,11 @@ async function fetchAgentStatsProgressive(params) {
 }
 
 /**
- * Convert Unix timestamp to readable date string (Asia/Kolkata timezone)
+ * Convert Unix timestamp to readable date string
  */
 function timestampToDate(timestamp) {
-    return new Date(timestamp * 1000).toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
+    return new Date(timestamp * 1000).toLocaleString('en-AE', {
+        timeZone: 'Asia/Dubai',
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
@@ -139,27 +138,39 @@ function timestampToDate(timestamp) {
 
 /**
  * Extract individual custom states from API response's not_available_detailed_report
- * Dynamically processes all states from API without hardcoded mappings
  * @param {object} notAvailableDetailedReport - Object with state names as keys and duration in seconds as values
- * @returns {object} - Object with custom state durations in HH:MM:SS format
+ * @returns {object} - Object with individual custom state durations in HH:MM:SS format
  */
 function extractIndividualCustomStatesFromAPI(notAvailableDetailedReport) {
-    const customStates = {};
+    const defaultStates = {
+        customStateShortBreak: '00:00:00',
+        customStateBioBreak: '00:00:00',
+        customStateLunchBreak: '00:00:00',
+        customStateLogoff: '00:00:00',
+        customStateMeeting: '00:00:00',
+        customStateTraining: '00:00:00',
+        customStateTicketB2B: '00:00:00',
+        customStateTicketB2C: '00:00:00',
+        customStateChat: '00:00:00',
+        customStateLogIn: '00:00:00'
+    };
 
     if (!notAvailableDetailedReport || typeof notAvailableDetailedReport !== 'object') {
-        return customStates;
+        return defaultStates;
     }
 
-    // Helper to convert state name to camelCase database column name
-    const toColumnName = (stateName) => {
-        // Convert to camelCase: "Lunch Break" -> "lunchBreak", "Log In" -> "logIn"
-        return 'customState' + stateName
-            .split(/[\s-]+/)  // Split by space or hyphen
-            .map((word, index) => {
-                // Capitalize first letter of each word
-                return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-            })
-            .join('');
+    // Map state names to our database column names
+    const stateMapping = {
+        'Short Break': 'customStateShortBreak',
+        'Bio Break': 'customStateBioBreak', 
+        'Lunch Break': 'customStateLunchBreak',
+        'Logoff': 'customStateLogoff',
+        'Meeting': 'customStateMeeting',
+        'training': 'customStateTraining',
+        'Ticket_B2B': 'customStateTicketB2B',
+        'Ticket_B2C': 'customStateTicketB2C',
+        'Chat': 'customStateChat',
+        'Log In': 'customStateLogIn'
     };
 
     // Helper to format seconds into HH:MM:SS
@@ -168,36 +179,52 @@ function extractIndividualCustomStatesFromAPI(notAvailableDetailedReport) {
         return new Date(seconds * 1000).toISOString().substr(11, 8);
     };
 
-    // Process each state from the API response dynamically
+    // Process each state from the API response
     for (const [stateName, durationSeconds] of Object.entries(notAvailableDetailedReport)) {
-        if (durationSeconds > 0) {
-            const columnName = toColumnName(stateName);
-            customStates[columnName] = formatSeconds(durationSeconds);
+        const mappedKey = stateMapping[stateName];
+        if (mappedKey && durationSeconds > 0) {
+            defaultStates[mappedKey] = formatSeconds(durationSeconds);
         }
     }
 
-    return customStates;
+    return defaultStates;
 }
 
 /**
  * Extract individual custom states from the combined custom states string
- * Dynamically processes all states without hardcoded mappings
  * @param {string} customStatesString - Custom states in format: "[State : duration_seconds], [State : duration_seconds], ..."
  * @returns {object} - Object with individual custom state durations in HH:MM:SS format
  */
 function extractIndividualCustomStates(customStatesString) {
-    const customStates = {};
+    const defaultStates = {
+        customStateShortBreak: '00:00:00',
+        customStateBioBreak: '00:00:00',
+        customStateLunchBreak: '00:00:00',
+        customStateLogoff: '00:00:00',
+        customStateMeeting: '00:00:00',
+        customStateTraining: '00:00:00',
+        customStateTicketB2B: '00:00:00',
+        customStateTicketB2C: '00:00:00',
+        customStateChat: '00:00:00',
+        customStateLogIn: '00:00:00'
+    };
 
     if (!customStatesString || customStatesString.trim() === '') {
-        return customStates;
+        return defaultStates;
     }
 
-    // Helper to convert state name to camelCase database column name
-    const toColumnName = (stateName) => {
-        return 'customState' + stateName
-            .split(/[\s-]+/)
-            .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-            .join('');
+    // Map state names to our database column names
+    const stateMapping = {
+        'Short Break': 'customStateShortBreak',
+        'Bio Break': 'customStateBioBreak', 
+        'Lunch Break': 'customStateLunchBreak',
+        'Logoff': 'customStateLogoff',
+        'Meeting': 'customStateMeeting',
+        'training': 'customStateTraining',
+        'Ticket_B2B': 'customStateTicketB2B',
+        'Ticket_B2C': 'customStateTicketB2C',
+        'Chat': 'customStateChat',
+        'Log In': 'customStateLogIn'
     };
 
     // Helper to format seconds into HH:MM:SS
@@ -211,37 +238,29 @@ function extractIndividualCustomStates(customStatesString) {
     
     if (stateMatches) {
         stateMatches.forEach(match => {
-            const parts = match.slice(1, -1).split(':');
+            const parts = match.slice(1, -1).split(':'); // Remove brackets and split
             const stateName = parts[0].trim();
             const durationSeconds = parseInt(parts[1].trim());
             
-            if (durationSeconds > 0) {
-                const columnName = toColumnName(stateName);
-                customStates[columnName] = formatSeconds(durationSeconds);
+            const mappedKey = stateMapping[stateName];
+            if (mappedKey && durationSeconds > 0) {
+                defaultStates[mappedKey] = formatSeconds(durationSeconds);
             }
         });
     }
 
-    return customStates;
+    return defaultStates;
 }
 
 /**
  * Calculate productive and non-productive break times from API response's not_available_detailed_report
- * Uses tenant configuration to determine which states are productive/non-productive
  * @param {object} notAvailableDetailedReport - Object with state names as keys and duration in seconds as values
- * @param {string} tenant - Tenant name to get configuration
  * @returns {object} - {productiveBreakTime: "HH:MM:SS", nonProductiveBreakTime: "HH:MM:SS"}
  */
-function calculateBreakTimesFromAPI(notAvailableDetailedReport, tenant) {
-    // Get tenant configuration for productive/non-productive states
-    const tenantConfig = TENANT_CONFIG[tenant];
-    if (!tenantConfig) {
-        // Without a config every state is unclassified and both break columns silently
-        // come out 00:00:00 — surface it instead of shipping zeros.
-        console.warn(`⚠️ No tenant config for "${tenant}" - break times cannot be classified and will be 00:00:00`);
-    }
-    const productiveStates = tenantConfig?.productive_states || [];
-    const nonProductiveStates = tenantConfig?.non_productive_states || [];
+function calculateBreakTimesFromAPI(notAvailableDetailedReport) {
+    // Define productive and non-productive states
+    const productiveStates = ['Meeting', 'training', 'Ticket_B2B', 'Ticket_B2C', 'Chat', 'Log In', 'available'];
+    const nonProductiveStates = ['Short Break', 'Bio Break', 'Lunch Break', 'Logoff'];
     
     let productiveSeconds = 0;
     let nonProductiveSeconds = 0;
@@ -286,29 +305,16 @@ function calculateBreakTimesFromAPI(notAvailableDetailedReport, tenant) {
     return result;
 }
 
+
 /**
  * Calculate productive and non-productive break times from custom states
  * @param {string} customStatesText - Custom states in format: "State1 (time1 to time2), State2 (time3 to time4), ..."
- * @param {string} tenant - Tenant name to get configuration
  * @returns {object} - {productiveBreakTime: "HH:MM:SS", nonProductiveBreakTime: "HH:MM:SS"}
  */
-function calculateBreakTimes(customStatesText, tenant) {
-    // Legacy lists, kept only as a fallback for tenants with no configured states.
-    const LEGACY_PRODUCTIVE_STATES = ['Training', 'Login', 'Log In', 'Chat', 'Meeting', 'Setup', 'LQ', 'Gallabox', 'Quality Feedback', 'Quality feedback', 'Query CP', 'Query CX', 'Feedback Session', 'Floor Support'];
-    const LEGACY_NON_PRODUCTIVE_STATES = ['Lunch Break', 'Tea Break', 'Bio', 'Short Break 1', 'Short Break1', 'Short Break 2', 'Short Break2', 'Logoff', 'Downtime'];
-
-    // Classify against the tenant's own states - the legacy lists don't know about
-    // states this deployment actually reports (e.g. "Manual", or plain "lunch").
-    const tenantConfig = TENANT_CONFIG[tenant];
-    if (!tenantConfig) {
-        console.warn(`⚠️ No tenant config for "${tenant}" - falling back to legacy state lists for break classification`);
-    }
-    const productiveStates = tenantConfig?.productive_states?.length
-        ? tenantConfig.productive_states
-        : LEGACY_PRODUCTIVE_STATES;
-    const nonProductiveStates = tenantConfig?.non_productive_states?.length
-        ? tenantConfig.non_productive_states
-        : LEGACY_NON_PRODUCTIVE_STATES;
+function calculateBreakTimes(customStatesText) {
+    // Define productive and non-productive states
+    const productiveStates = ['Meeting', 'training', 'Ticket_B2B', 'Ticket_B2C', 'Chat', 'Log In', 'available'];
+    const nonProductiveStates = ['Short Break', 'Bio Break', 'Lunch Break', 'Logoff'];
     
     let productiveSeconds = 0;
     let nonProductiveSeconds = 0;
@@ -445,7 +451,7 @@ function formatSecondsToTime(seconds) {
  * granular hourly data instead of daily aggregates. This provides true hourly
  * statistics but increases API calls from 1 to N hours for better accuracy.
  */
-async function populateAgentStatsHourly(startTimestamp, endTimestamp, tenant) {
+async function populateAgentStatsHourly(startTimestamp, endTimestamp) {
     try {
         console.log('\n📊 Populating agent stats with hourly time slots (HOURLY API CALLS)...');
         
@@ -455,13 +461,15 @@ async function populateAgentStatsHourly(startTimestamp, endTimestamp, tenant) {
         
         // PROGRESSIVE LOADING: Fetch agent stats with HOURLY chunked approach for large datasets
         console.log('\n🚀 Fetching agent stats using PROGRESSIVE HOURLY LOADING for large datasets...');
-        console.log(`📊 Fetching stats from ${timestampToDate(startTimestamp)} to ${timestampToDate(endTimestamp)}`);
+        console.log(`📊 Fetching stats from ${timestampToDubaiDate(startTimestamp)} to ${timestampToDubaiDate(endTimestamp)}`);
         
         let hourlyAgentData = null;
         try {
             console.log(`🔍 DEBUG: Calling fetchAgentStatsProgressive with:`);
             console.log(`   - startDate: ${startTimestamp * 1000} (${new Date(startTimestamp * 1000).toISOString()})`);
             console.log(`   - endDate: ${endTimestamp * 1000} (${new Date(endTimestamp * 1000).toISOString()})`);
+            
+            const tenant = process.env.TENANT || 'spc';
             console.log(`   - tenant: ${tenant}`);
             
             hourlyAgentData = await fetchAgentStatsProgressive({
@@ -503,7 +511,7 @@ async function populateAgentStatsHourly(startTimestamp, endTimestamp, tenant) {
                                     // Add basic stats structure
                                     agent: {
                                         Login: '00:00:00',
-                                        Train: '00:00:00',
+                                        break: '00:00:00',
                                         lunch: '00:00:00',
                                         training: '00:00:00'
                                     }
@@ -549,6 +557,7 @@ async function populateAgentStatsHourly(startTimestamp, endTimestamp, tenant) {
         for (let i = 0; i < timeSlots.length; i++) {
             const slot = timeSlots[i];
             console.log(`\n📅 Processing slot ${i + 1}/${timeSlots.length}: ${slot.slotLabel}`);
+            console.log(`   Time Range: ${timestampToDubaiDate(slot.startTime)} → ${timestampToDubaiDate(slot.endTime)}`);
             
             try {
                 // Find the corresponding hourly chunk for this time slot
@@ -607,7 +616,7 @@ async function populateAgentStatsHourly(startTimestamp, endTimestamp, tenant) {
                     console.log(`   🔍 DEBUG: About to insert ${batchStatsData.length} records for slot ${slot.slotLabel}`);
                     console.log(`   🔍 DEBUG: Sample record:`, JSON.stringify(batchStatsData[0], null, 2));
                     
-                    const result = await batchInsertAgentStats(batchStatsData, tenant);
+                    const result = await batchInsertAgentStats(batchStatsData);
                     slotInsertCount = batchStatsData.length;
                     totalInsertCount += slotInsertCount;
                     
@@ -635,13 +644,12 @@ async function populateAgentStatsHourly(startTimestamp, endTimestamp, tenant) {
  * Populate agent activity events with hourly time slot association
  * For agent_activity: Create new rows for each state change within time slots
  */
-async function populateAgentActivityHourly(startTimestamp, endTimestamp, tenant) {
+async function populateAgentActivityHourly(startTimestamp, endTimestamp) {
     try {
         console.log('\n🎯 Populating agent activity events with hourly time slot association...');
         console.log(`🔍 DEBUG: populateAgentActivityHourly called with:`);
-        console.log(`   - startTimestamp: ${startTimestamp} (${timestampToDate(startTimestamp)})`);
-        console.log(`   - endTimestamp: ${endTimestamp} (${timestampToDate(endTimestamp)})`);
-        console.log(`   - tenant: ${tenant}`);
+        console.log(`   - startTimestamp: ${startTimestamp} (${timestampToDubaiDate(startTimestamp)})`);
+        console.log(`   - endTimestamp: ${endTimestamp} (${timestampToDubaiDate(endTimestamp)})`);
         
         // Generate hourly time slots
         const timeSlots = generateHourlyTimeSlots(startTimestamp, endTimestamp);
@@ -656,6 +664,7 @@ async function populateAgentActivityHourly(startTimestamp, endTimestamp, tenant)
         
         // Fetch all agent activity events for the entire time range
         console.log('🔄 Fetching agent activity events...');
+        const tenant = process.env.TENANT || 'spc';
         console.log(`🔍 DEBUG: Using tenant: ${tenant} for events API`);
         const events = await fetchAgentEvents(tenant, {
             startDate: startTimestamp,
@@ -702,7 +711,7 @@ async function populateAgentActivityHourly(startTimestamp, endTimestamp, tenant)
                 const timeSlot = findTimeSlotForTimestamp(eventTimestamp, timeSlots);
                 
                 if (!timeSlot) {
-                    console.warn(`   ⚠️ Event timestamp ${eventTimestamp} (${timestampToDate(eventTimestamp)}) does not fall within any time slot`);
+                    console.warn(`   ⚠️ Event timestamp ${eventTimestamp} (${timestampToDubaiDate(eventTimestamp)}) does not fall within any time slot`);
                     continue;
                 }
                 
@@ -737,7 +746,7 @@ async function populateAgentActivityHourly(startTimestamp, endTimestamp, tenant)
             const chunkSize = 1000;
             for (let i = 0; i < batchActivityData.length; i += chunkSize) {
                 const chunk = batchActivityData.slice(i, i + chunkSize);
-                await batchInsertAgentActivities(chunk, tenant);
+                await batchInsertAgentActivities(chunk);
                 totalInsertCount += chunk.length;
                 
                 if (i + chunkSize < batchActivityData.length) {
@@ -785,7 +794,7 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
             console.log(`   - startTime >= ${startTimestamp} (${new Date(startTimestamp * 1000).toISOString()})`);
             console.log(`   - endTime <= ${endTimestamp} (${new Date(endTimestamp * 1000).toISOString()})`);
             
-            allDbStatsRows = await getAllAgentStatsForTimeRange(startTimestamp, endTimestamp, tenant);
+            allDbStatsRows = await getAllAgentStatsForTimeRange(startTimestamp, endTimestamp);
             console.log(`✅ Retrieved ${allDbStatsRows.length} agent stats records from database`);
             
             if (allDbStatsRows.length === 0) {
@@ -806,7 +815,7 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
         
         let dbActivitiesData = null;
         try {
-            const dbActivityRows = await getAllAgentActivitiesForTimeRange(startTimestamp, endTimestamp, tenant);
+            const dbActivityRows = await getAllAgentActivitiesForTimeRange(startTimestamp, endTimestamp);
             console.log(`✅ Retrieved ${dbActivityRows.length} agent activity records from database`);
             
             // Convert database format to API format for compatibility
@@ -825,7 +834,6 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
         const loginLogoffData = getAgentLoginLogoffTimes(dbActivitiesData || []);
         const loginLogoffMap = new Map(loginLogoffData.map(item => [item.ext, item]));
         console.log(`✅ Calculated login/logout times for ${loginLogoffData.length} agents`);
-        
         
         // Step 3: Process each time slot using database data
         console.log('\n🔄 STEP 3: Processing time slots using database data...');
@@ -868,21 +876,19 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
                 
                 // Keep the complete event context. State intervals can begin in
                 // one hour and end in the next, so slot-only filtering loses the
-                // state that was active at the boundary and the report cannot
-                // clip it to the correct hour.
+                // state that was active at the boundary.
                 const slotActivities = dbActivitiesData;
-
-                console.log(`   📊 Passing ${slotActivities.length} activities as context for slot ${slot.slotLabel}`);
-
+                
+                console.log(`   📊 Found ${slotActivities.length} activities for slot ${slot.slotLabel}`);
+                
                 // Generate enhanced report using DATABASE TABLE DATA for this specific time slot
                 console.log(`   🔄 Using generateEnhancedAgentReportFromDB for slot-specific data processing...`);
-
+                
                 const report = await generateEnhancedAgentReportFromDB(
                     slotStatsData,    // Agent stats filtered for this specific time slot
-                    slotActivities,   // Full event context, clipped to the slot during reconciliation
+                    slotActivities,   // Activities filtered for this specific time slot
                     slot,             // Time slot object with startTime, endTime, slotLabel
-                    loginLogoffMap,   // Pre-calculated login/logout times for all agents (entire day)
-                    tenant            // Tenant key for dynamic custom state handling
+                    loginLogoffMap    // Pre-calculated login/logout times for all agents (entire day)
                 );
                 
                 // Batch process records for efficient database insertion
@@ -895,10 +901,10 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
                         let breakTimes;
                         if (record.rawData && record.rawData.not_available_detailed_report) {
                             // Use new API format with not_available_detailed_report object
-                            breakTimes = calculateBreakTimesFromAPI(record.rawData.not_available_detailed_report, tenant);
+                            breakTimes = calculateBreakTimesFromAPI(record.rawData.not_available_detailed_report);
                         } else {
                             // Fallback to old string format
-                            breakTimes = calculateBreakTimes(record.customStates || '', tenant);
+                            breakTimes = calculateBreakTimes(record.customStates || '');
                         }
                         
                         // Extract individual custom states - try API format first, then fallback to string format
@@ -932,26 +938,16 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
                             onCallTime: record.onCallTime || '00:00:00',
                             customStates: record.customStates || null,
                             // Individual custom states
-
-                            customStateLogin: individualCustomStates.customStateLogin,
-                            customStateLogout: individualCustomStates.customStateLogout,
+                            customStateShortBreak: individualCustomStates.customStateShortBreak,
+                            customStateBioBreak: individualCustomStates.customStateBioBreak,
                             customStateLunchBreak: individualCustomStates.customStateLunchBreak,
-                            customStateTeaBreak: individualCustomStates.customStateTeaBreak,
-                            customStateBio: individualCustomStates.customStateBio,
-                            customStateShortBreak1: individualCustomStates.customStateShortBreak1,
-                            customStateShortBreak2: individualCustomStates.customStateShortBreak2,
-                            customStateTraining: individualCustomStates.customStateTraining,
-                            customStateChat: individualCustomStates.customStateChat,
+                            customStateLogoff: individualCustomStates.customStateLogoff,
                             customStateMeeting: individualCustomStates.customStateMeeting,
-                            customStateDowntime: individualCustomStates.customStateDowntime,
-                            customStateFeedbackSession: individualCustomStates.customStateFeedbackSession,
-                            customStateFloorSupport: individualCustomStates.customStateFloorSupport,
-                            customStateGallabox: individualCustomStates.customStateGallabox,
-                            customStateLq: individualCustomStates.customStateLq,
-                            customStateQualityFeedback: individualCustomStates.customStateQualityFeedback,
-                            customStateQueryCp: individualCustomStates.customStateQueryCp,
-                            customStateQueryCx: individualCustomStates.customStateQueryCx,
-                            customStateSetup: individualCustomStates.customStateSetup,
+                            customStateTraining: individualCustomStates.customStateTraining,
+                            customStateTicketB2B: individualCustomStates.customStateTicketB2B,
+                            customStateTicketB2C: individualCustomStates.customStateTicketB2C,
+                            customStateChat: individualCustomStates.customStateChat,
+                            customStateLogIn: individualCustomStates.customStateLogIn,
                             productiveBreakTime: breakTimes.productiveBreakTime,
                             nonProductiveBreakTime: breakTimes.nonProductiveBreakTime,
                             reportStartTime: startTimestamp,
@@ -974,7 +970,7 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
                             
                             // Insert batch
                             for (const record of batch) {
-                                await insertAgentCompleteHourly(record, tenant);
+                                await insertAgentCompleteHourly(record);
                                 insertCount++;
                             }
                             
@@ -1009,7 +1005,8 @@ async function populateFinalAPRHourly(tenant, timeSlots, startTimestamp, endTime
 /**
  * Populate all tables with hourly time slot data
  */
-async function populateAllTablesHourly(startTime, endTime, tenant) {
+async function populateAllTablesHourly(startTime, endTime) {
+    const tenant = process.env.TENANT || 'spc';
     
     console.log('🚀 STARTING HOURLY-BASED DATABASE POPULATION PROCESS');
     console.log(`📅 Time Range: ${timestampToDate(startTime)} - ${timestampToDate(endTime)}`);
@@ -1039,8 +1036,8 @@ async function populateAllTablesHourly(startTime, endTime, tenant) {
         // NEW DATA PIPELINE: APIs → Database Tables → Final Report Table
         console.log('\n🚀 STEP 1: Populate base tables from APIs (PARALLEL execution)...');
         const [statsCount, activityCount] = await Promise.all([
-            populateAgentStatsHourly(startTime, endTime, tenant),
-            populateAgentActivityHourly(startTime, endTime, tenant)
+            populateAgentStatsHourly(startTime, endTime),
+            populateAgentActivityHourly(startTime, endTime)
         ]);
         
         console.log('\n✅ Base tables populated! Now generating final APR from DATABASE TABLES...');
@@ -1100,13 +1097,6 @@ EXAMPLE:
 PARAMETERS:
   startTimestamp  - Unix timestamp for start time (seconds)
   endTimestamp    - Unix timestamp for end time (seconds)
-  tenant          - (Optional) Tenant name (thriveco, hero, amity)
-                    If not specified, populates ALL tenants in parallel
-
-EXAMPLES:
-  node populate-final-hourly.js 1779647400 1779733740 thriveco  # Single tenant
-  node populate-final-hourly.js 1779647400 1779733740 hero      # Single tenant
-  node populate-final-hourly.js 1779647400 1779733740            # ALL tenants (parallel)
 
 NEW DATA PIPELINE:
   • STEP 1: APIs → agent_stats & agent_activity tables
@@ -1128,14 +1118,13 @@ ENVIRONMENT VARIABLES:
   DB_PASSWORD     - MySQL password (default: empty)
   DB_NAME         - Database name (default: agent_reports)
   DB_PORT         - MySQL port (default: 3306)
-  TENANT          - Tenant name (default: all tenants if not specified)
+  TENANT          - Tenant name (default: spc)
         `);
         process.exit(1);
     }
     
     const startTime = parseInt(args[0]);
     const endTime = parseInt(args[1]);
-    const tenant = args[2] || process.env.TENANT || null;
     
     // Validate timestamps
     if (isNaN(startTime) || isNaN(endTime)) {
@@ -1157,40 +1146,7 @@ ENVIRONMENT VARIABLES:
         console.warn('⚠️  Warning: Timestamps seem to be outside reasonable range (more than 1 year ago or in future)');
     }
     
-    let success;
-    
-    // If no tenant specified, populate all tenants in parallel
-    if (!tenant) {
-        const allTenants = Object.keys(TENANT_CONFIG);
-        console.log(`\n🌐 No tenant specified - populating data for ALL tenants in parallel: ${allTenants.join(', ')}\n`);
-        
-        const results = await Promise.allSettled(
-            allTenants.map(tenantKey => 
-                populateAllTablesHourly(startTime, endTime, tenantKey)
-                    .then(result => ({ tenant: tenantKey, success: result }))
-                    .catch(error => ({ tenant: tenantKey, success: false, error: error.message }))
-            )
-        );
-        
-        console.log('\n📊 SUMMARY OF ALL TENANTS:');
-        results.forEach(result => {
-            if (result.status === 'fulfilled') {
-                const { tenant: t, success: s, error } = result.value;
-                if (s) {
-                    console.log(`  ✅ ${t}: SUCCESS`);
-                } else {
-                    console.log(`  ❌ ${t}: FAILED - ${error || 'Unknown error'}`);
-                }
-            } else {
-                console.log(`  ❌ Tenant processing failed: ${result.reason}`);
-            }
-        });
-        
-        success = results.every(r => r.status === 'fulfilled' && r.value.success);
-    } else {
-        // Single tenant mode
-        success = await populateAllTablesHourly(startTime, endTime, tenant);
-    }
+    const success = await populateAllTablesHourly(startTime, endTime);
     
     // Exit with appropriate code when run directly from CLI
     process.exit(success ? 0 : 1);

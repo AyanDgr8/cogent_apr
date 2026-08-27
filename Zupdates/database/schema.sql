@@ -1,8 +1,8 @@
 -- Enhanced Agent Reporting Database Schema with Hourly Time Slots
--- Updated for Meydan Agent Performance Reports with hourly-based data population
+-- Updated for SPC Agent Performance Reports with hourly-based data population
 
-CREATE DATABASE IF NOT EXISTS agent_reports_meydan;
-USE agent_reports_meydan;
+CREATE DATABASE IF NOT EXISTS agent_reports_spc;
+USE agent_reports_spc;
 
 -- Table 1: Agent Stats (Enhanced with hourly time slots)
 -- Stores agent statistics data from the stats API with hourly granularity
@@ -153,26 +153,16 @@ DESCRIBE agent_complete_hourly;
 
 
 
+
 -- Add individual custom state columns to agent_complete_hourly table
 ALTER TABLE agent_complete_hourly 
-ADD COLUMN custom_state_login VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Login duration',
-ADD COLUMN custom_state_logoff VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Logoff duration',
+ADD COLUMN custom_state_short_break VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Short Break duration',
+ADD COLUMN custom_state_bio_break VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Bio Break duration',
 ADD COLUMN custom_state_lunch_break VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Lunch Break duration',
-ADD COLUMN custom_state_tea_break VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Tea Break duration',
-ADD COLUMN custom_state_bio VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Bio duration',
-ADD COLUMN custom_state_short_break_1 VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - SHORT BREAK 1 duration',
-ADD COLUMN custom_state_short_break_2 VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - SHORT BREAK 2 duration',
-ADD COLUMN custom_state_training VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Training duration',
-ADD COLUMN custom_state_chat VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Chat duration',
+ADD COLUMN custom_state_logoff VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Logoff duration',
 ADD COLUMN custom_state_meeting VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Meeting duration',
-ADD COLUMN custom_state_downtime VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Downtime duration',
-ADD COLUMN custom_state_feedback_session VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Feedback Session duration',
-ADD COLUMN custom_state_floor_support VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Floor Support duration',
-ADD COLUMN custom_state_gallabox VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Gallabox duration',
-ADD COLUMN custom_state_lq VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - LQ duration',
-ADD COLUMN custom_state_quality_feedback VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Quality Feedback duration',
-ADD COLUMN custom_state_query_cp VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Query CP duration',
-ADD COLUMN custom_state_query_cx VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Query CX duration',
-ADD COLUMN custom_state_setup VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Setup duration';
-
-
+ADD COLUMN custom_state_training VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Training duration',
+ADD COLUMN custom_state_ticket_b2b VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Ticket_B2B duration',
+ADD COLUMN custom_state_ticket_b2c VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Ticket_B2C duration',
+ADD COLUMN custom_state_chat VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Chat duration',
+ADD COLUMN custom_state_log_in VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Log In duration';

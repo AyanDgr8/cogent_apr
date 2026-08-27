@@ -9,25 +9,18 @@ const dbConfig = {
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || '',
+    database: process.env.DB_NAME || 'agent_reports',
     port: process.env.DB_PORT || 3306,
-    // Read/write MySQL DATETIME values consistently as Indian Standard Time.
-    timezone: '+05:30',
     waitForConnections: true,
     connectionLimit: 10,
-    queueLimit: 0
+    queueLimit: 0,
+    acquireTimeout: 60000,
+    timeout: 60000,
+    reconnect: true
 };
 
 // Create connection pool
 export const pool = mysql.createPool(dbConfig);
-
-// MySQL functions such as NOW() and TIMESTAMP conversions use the session
-// timezone. Apply IST to every physical connection created by the pool.
-pool.on('connection', connection => {
-    connection.query("SET time_zone = '+05:30'", error => {
-        if (error) console.error('❌ Failed to set MySQL session timezone to IST:', error.message);
-    });
-});
 
 // Test database connection
 export async function testConnection() {
@@ -68,15 +61,12 @@ export async function executeQuery(query, params = []) {
 }
 
 // Insert agent stats data with hourly time slot approach
-export async function insertAgentStats(agentName, agentTags, rawData, startTime, endTime, timeSlotLabel, tenant) {
+export async function insertAgentStats(agentName, agentTags, rawData, startTime, endTime, timeSlotLabel) {
     // Extract extension from rawData
     const extension = rawData.extension || 'unknown';
     
-    // Use tenant-specific table name
-    const tableName = tenant ? `agent_stats_${tenant}` : 'agent_stats';
-    
     const query = `
-        INSERT INTO ${tableName} (agent_name, agent_extension, agent_tags, raw_data, start_time, end_time, time_slot_label)
+        INSERT INTO agent_stats (agent_name, agent_extension, agent_tags, raw_data, start_time, end_time, time_slot_label)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
         agent_name = VALUES(agent_name),
@@ -98,12 +88,9 @@ export async function insertAgentStats(agentName, agentTags, rawData, startTime,
 }
 
 // Insert agent activity data with time slot association
-export async function insertAgentActivity(agentName, eventTimestamp, rawData, timeSlotStart, timeSlotEnd, timeSlotLabel, eventType = null, eventState = null, tenant) {
-    // Use tenant-specific table name
-    const tableName = tenant ? `agent_activity_${tenant}` : 'agent_activity';
-    
+export async function insertAgentActivity(agentName, eventTimestamp, rawData, timeSlotStart, timeSlotEnd, timeSlotLabel, eventType = null, eventState = null) {
     const query = `
-        INSERT INTO ${tableName} (agent_name, event_timestamp, raw_data, time_slot_start, time_slot_end, time_slot_label, event_type, event_state)
+        INSERT INTO agent_activity (agent_name, event_timestamp, raw_data, time_slot_start, time_slot_end, time_slot_label, event_type, event_state)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
         raw_data = JSON_MERGE_PATCH(raw_data, VALUES(raw_data)),
@@ -127,76 +114,129 @@ export async function insertAgentActivity(agentName, eventTimestamp, rawData, ti
 }
 
 // Insert agent complete hourly data with hourly time slots
-export async function insertAgentCompleteHourly(reportData, tenant) {
-    // Use tenant-specific table name
-    const tableName = tenant ? `agent_complete_hourly_${tenant}` : 'agent_complete_hourly';
-    
-    // Get tenant config to extract custom states dynamically
-    const { TENANT_CONFIG } = await import('../tenantConfig.js');
-    const tenantConfig = TENANT_CONFIG[tenant];
-    const allStates = [
-        ...(tenantConfig?.productive_states || []),
-        ...(tenantConfig?.non_productive_states || [])
-    ];
-    
-    // Generate custom state column names and values dynamically
-    const customStateColumns = allStates.map(state => {
-        const columnName = `custom_state_${state.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-        return columnName;
-    });
-    
-    const customStateValues = allStates.map(state => {
-        const columnName = `custom_state_${state.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-        return reportData[columnName] || '00:00:00';
-    });
-    
-    // Build column list
-    const baseColumns = [
-        'agent_name', 'agent_extension', 'start_time', 'end_time', 'time_slot_label',
-        'slot_start_datetime', 'slot_end_datetime', 'total_calls', 'answered_calls', 'failed_calls',
-        'answer_rate_percent', 'aht', 'login_time', 'available_time', 'first_login_time', 'last_logout_time',
-        'not_available_time', 'wrap_up_time', 'hold_time', 'on_call_time', 'custom_states',
-        'productive_break_time', 'non_productive_break_time', 'idle_time',
-        'report_start_time', 'report_end_time'
-    ];
-    
-    const allColumns = [...baseColumns, ...customStateColumns];
-    const placeholders = allColumns.map(() => '?').join(', ');
-    
-    // Build UPDATE clause for custom states
-    const customStateUpdates = customStateColumns.map(col => 
-        `${col} = IFNULL(VALUES(${col}), ${col})`
-    ).join(',\n    ');
-    
+export async function insertAgentCompleteHourly(reportData) {
     const query = `
-INSERT INTO ${tableName} (
-    ${allColumns.join(', ')}
-)
-VALUES (${placeholders})
-ON DUPLICATE KEY UPDATE
-    agent_name = VALUES(agent_name),
-    time_slot_label = VALUES(time_slot_label),
-    total_calls = VALUES(total_calls),
-    answered_calls = VALUES(answered_calls),
-    failed_calls = VALUES(failed_calls),
-    answer_rate_percent = VALUES(answer_rate_percent),
-    aht = IFNULL(VALUES(aht), aht),
-    login_time = IFNULL(VALUES(login_time), login_time),
-    available_time = VALUES(available_time),
-    first_login_time = IFNULL(VALUES(first_login_time), first_login_time),
-    last_logout_time = IFNULL(VALUES(last_logout_time), last_logout_time),
-    not_available_time = IFNULL(VALUES(not_available_time), not_available_time),
-    wrap_up_time = IFNULL(VALUES(wrap_up_time), wrap_up_time),
-    hold_time = IFNULL(VALUES(hold_time), hold_time),
-    on_call_time = IFNULL(VALUES(on_call_time), on_call_time),
-    custom_states = IF(VALUES(custom_states) != '', VALUES(custom_states), custom_states),
-    productive_break_time = IFNULL(VALUES(productive_break_time), productive_break_time),
-    non_productive_break_time = IFNULL(VALUES(non_productive_break_time), non_productive_break_time),
-    idle_time = IFNULL(VALUES(idle_time), idle_time)${customStateUpdates ? ',\n    ' + customStateUpdates : ''}
-`;
+        INSERT INTO agent_complete_hourly (
+            agent_name, agent_extension, start_time, end_time, time_slot_label, 
+            slot_start_datetime, slot_end_datetime, total_calls, answered_calls, failed_calls,
+            answer_rate_percent, aht, login_time, available_time, first_login_time, last_logout_time, 
+            not_available_time, wrap_up_time, hold_time, on_call_time, custom_states, 
+            custom_state_short_break, custom_state_bio_break, custom_state_lunch_break, 
+            custom_state_logoff, custom_state_meeting, custom_state_training, 
+            custom_state_ticket_b2b, custom_state_ticket_b2c, custom_state_chat, custom_state_log_in,
+            productive_break_time, non_productive_break_time, idle_time,
+            report_start_time, report_end_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+        agent_name = VALUES(agent_name),
+        total_calls = CASE 
+            WHEN VALUES(total_calls) > 0 OR total_calls = 0 THEN VALUES(total_calls)
+            ELSE total_calls 
+        END,
+        answered_calls = CASE 
+            WHEN VALUES(answered_calls) > 0 OR answered_calls = 0 THEN VALUES(answered_calls)
+            ELSE answered_calls 
+        END,
+        failed_calls = CASE 
+            WHEN VALUES(failed_calls) > 0 OR failed_calls = 0 THEN VALUES(failed_calls)
+            ELSE failed_calls 
+        END,
+        answer_rate_percent = CASE 
+            WHEN VALUES(answer_rate_percent) > 0 OR answer_rate_percent = 0 THEN VALUES(answer_rate_percent)
+            ELSE answer_rate_percent 
+        END,
+        aht = CASE 
+            WHEN VALUES(aht) != '00:00:00' OR aht = '00:00:00' THEN VALUES(aht)
+            ELSE aht 
+        END,
+        login_time = CASE 
+            WHEN VALUES(login_time) != '00:00:00' OR login_time = '00:00:00' THEN VALUES(login_time)
+            ELSE login_time 
+        END,
+        available_time = VALUES(available_time),
+        first_login_time = CASE 
+            WHEN VALUES(first_login_time) IS NOT NULL THEN VALUES(first_login_time)
+            ELSE first_login_time 
+        END,
+        last_logout_time = CASE 
+            WHEN VALUES(last_logout_time) IS NOT NULL THEN VALUES(last_logout_time)
+            ELSE last_logout_time 
+        END,
+        not_available_time = CASE 
+            WHEN VALUES(not_available_time) != '00:00:00' OR not_available_time = '00:00:00' THEN VALUES(not_available_time)
+            ELSE not_available_time 
+        END,
+        wrap_up_time = CASE 
+            WHEN VALUES(wrap_up_time) != '00:00:00' OR wrap_up_time = '00:00:00' THEN VALUES(wrap_up_time)
+            ELSE wrap_up_time 
+        END,
+        hold_time = CASE 
+            WHEN VALUES(hold_time) != '00:00:00' OR hold_time = '00:00:00' THEN VALUES(hold_time)
+            ELSE hold_time 
+        END,
+        on_call_time = CASE 
+            WHEN VALUES(on_call_time) != '00:00:00' OR on_call_time = '00:00:00' THEN VALUES(on_call_time)
+            ELSE on_call_time 
+        END,
+        custom_states = CASE 
+            WHEN VALUES(custom_states) IS NOT NULL AND VALUES(custom_states) != '' THEN VALUES(custom_states)
+            ELSE custom_states 
+        END,
+        productive_break_time = CASE 
+            WHEN VALUES(productive_break_time) != '00:00:00' OR productive_break_time = '00:00:00' THEN VALUES(productive_break_time)
+            ELSE productive_break_time 
+        END,
+        non_productive_break_time = CASE 
+            WHEN VALUES(non_productive_break_time) != '00:00:00' OR non_productive_break_time = '00:00:00' THEN VALUES(non_productive_break_time)
+            ELSE non_productive_break_time 
+        END,
+        idle_time = CASE 
+            WHEN VALUES(idle_time) != '00:00:00' OR idle_time = '00:00:00' THEN VALUES(idle_time)
+            ELSE idle_time 
+        END,
+        custom_state_short_break = CASE 
+            WHEN VALUES(custom_state_short_break) != '00:00:00' OR custom_state_short_break = '00:00:00' THEN VALUES(custom_state_short_break)
+            ELSE custom_state_short_break 
+        END,
+        custom_state_bio_break = CASE 
+            WHEN VALUES(custom_state_bio_break) != '00:00:00' OR custom_state_bio_break = '00:00:00' THEN VALUES(custom_state_bio_break)
+            ELSE custom_state_bio_break 
+        END,
+        custom_state_lunch_break = CASE 
+            WHEN VALUES(custom_state_lunch_break) != '00:00:00' OR custom_state_lunch_break = '00:00:00' THEN VALUES(custom_state_lunch_break)
+            ELSE custom_state_lunch_break 
+        END,
+        custom_state_logoff = CASE 
+            WHEN VALUES(custom_state_logoff) != '00:00:00' OR custom_state_logoff = '00:00:00' THEN VALUES(custom_state_logoff)
+            ELSE custom_state_logoff 
+        END,
+        custom_state_meeting = CASE 
+            WHEN VALUES(custom_state_meeting) != '00:00:00' OR custom_state_meeting = '00:00:00' THEN VALUES(custom_state_meeting)
+            ELSE custom_state_meeting 
+        END,
+        custom_state_training = CASE 
+            WHEN VALUES(custom_state_training) != '00:00:00' OR custom_state_training = '00:00:00' THEN VALUES(custom_state_training)
+            ELSE custom_state_training 
+        END,
+        custom_state_ticket_b2b = CASE 
+            WHEN VALUES(custom_state_ticket_b2b) != '00:00:00' OR custom_state_ticket_b2b = '00:00:00' THEN VALUES(custom_state_ticket_b2b)
+            ELSE custom_state_ticket_b2b 
+        END,
+        custom_state_ticket_b2c = CASE 
+            WHEN VALUES(custom_state_ticket_b2c) != '00:00:00' OR custom_state_ticket_b2c = '00:00:00' THEN VALUES(custom_state_ticket_b2c)
+            ELSE custom_state_ticket_b2c 
+        END,
+        custom_state_chat = CASE 
+            WHEN VALUES(custom_state_chat) != '00:00:00' OR custom_state_chat = '00:00:00' THEN VALUES(custom_state_chat)
+            ELSE custom_state_chat 
+        END,
+        custom_state_log_in = CASE 
+            WHEN VALUES(custom_state_log_in) != '00:00:00' OR custom_state_log_in = '00:00:00' THEN VALUES(custom_state_log_in)
+            ELSE custom_state_log_in 
+        END
+    `;
     
-    // Build values array dynamically
-    const baseValues = [
+    return executeQuery(query, [
         reportData.agentName,
         reportData.agentExtension,
         reportData.startTime,
@@ -218,16 +258,22 @@ ON DUPLICATE KEY UPDATE
         reportData.holdTime,
         reportData.onCallTime,
         reportData.customStates,
+        reportData.customStateShortBreak || '00:00:00',
+        reportData.customStateBioBreak || '00:00:00',
+        reportData.customStateLunchBreak || '00:00:00',
+        reportData.customStateLogoff || '00:00:00',
+        reportData.customStateMeeting || '00:00:00',
+        reportData.customStateTraining || '00:00:00',
+        reportData.customStateTicketB2B || '00:00:00',
+        reportData.customStateTicketB2C || '00:00:00',
+        reportData.customStateChat || '00:00:00',
+        reportData.customStateLogIn || '00:00:00',
         reportData.productiveBreakTime || '00:00:00',
         reportData.nonProductiveBreakTime || '00:00:00',
         reportData.idleTime || '00:00:00',
         reportData.reportStartTime,
         reportData.reportEndTime
-    ];
-    
-    const allValues = [...baseValues, ...customStateValues];
-    
-    return executeQuery(query, allValues);
+    ]);
 }
 
 // Clear tables for fresh data
@@ -271,13 +317,10 @@ export async function getAgentCompleteHourly(startTime, endTime) {
 }
 
 // Batch insert agent stats for multiple time slots
-export async function batchInsertAgentStats(agentStatsArray, tenant) {
+export async function batchInsertAgentStats(agentStatsArray) {
     if (!agentStatsArray || agentStatsArray.length === 0) {
         return { affectedRows: 0 };
     }
-    
-    // Use tenant-specific table name
-    const tableName = tenant ? `agent_stats_${tenant}` : 'agent_stats';
     
     // For batch inserts with ON DUPLICATE KEY UPDATE, we need to insert one by one
     // or use a different approach. Let's use individual inserts for now.
@@ -291,8 +334,7 @@ export async function batchInsertAgentStats(agentStatsArray, tenant) {
                 item.rawData,
                 item.startTime,
                 item.endTime,
-                item.timeSlotLabel,
-                tenant
+                item.timeSlotLabel
             );
             totalAffectedRows += result.affectedRows || 0;
         } catch (error) {
@@ -304,13 +346,10 @@ export async function batchInsertAgentStats(agentStatsArray, tenant) {
 }
 
 // Batch insert agent activities for multiple events
-export async function batchInsertAgentActivities(activitiesArray, tenant) {
+export async function batchInsertAgentActivities(activitiesArray) {
     if (!activitiesArray || activitiesArray.length === 0) {
         return { affectedRows: 0 };
     }
-    
-    // Use tenant-specific table name
-    const tableName = tenant ? `agent_activity_${tenant}` : 'agent_activity';
     
     // Use individual inserts for better error handling
     let totalAffectedRows = 0;
@@ -325,8 +364,7 @@ export async function batchInsertAgentActivities(activitiesArray, tenant) {
                 item.timeSlotEnd,
                 item.timeSlotLabel,
                 item.eventType,
-                item.eventState,
-                tenant
+                item.eventState
             );
             totalAffectedRows += result.affectedRows || 0;
         } catch (error) {
@@ -376,10 +414,9 @@ export function extractEventDetails(rawData) {
 }
 
 // Get all agent stats data for a time range (for final APR processing)
-export async function getAllAgentStatsForTimeRange(startTime, endTime, tenant) {
-    const tableName = tenant ? `agent_stats_${tenant}` : 'agent_stats';
+export async function getAllAgentStatsForTimeRange(startTime, endTime) {
     const query = `
-        SELECT * FROM ${tableName} 
+        SELECT * FROM agent_stats 
         WHERE start_time < ? AND end_time > ?
         ORDER BY agent_name, start_time
     `;
@@ -387,10 +424,9 @@ export async function getAllAgentStatsForTimeRange(startTime, endTime, tenant) {
 }
 
 // Get all agent activities for a time range (for final APR processing)
-export async function getAllAgentActivitiesForTimeRange(startTime, endTime, tenant) {
-    const tableName = tenant ? `agent_activity_${tenant}` : 'agent_activity';
+export async function getAllAgentActivitiesForTimeRange(startTime, endTime) {
     const query = `
-        SELECT * FROM ${tableName} 
+        SELECT * FROM agent_activity 
         WHERE time_slot_start < ? AND time_slot_end > ?
         ORDER BY agent_name, event_timestamp
     `;

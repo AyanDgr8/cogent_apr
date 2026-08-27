@@ -8,19 +8,48 @@
 // and self-signed certificates (inherits httpsAgent from tokenService).
 
 import axios from 'axios';
-import { getApiKeyHeaders, httpsAgent } from './tokenService.js';
-import { TENANT_CONFIG } from './tenantConfig.js';
+import { httpsAgent } from './tokenService.js';
 
 const MAX_RETRIES = 3;
-const MAX_DISCOVERY_PASSES = 3;
 
-// Errors that mean "the request never reached the server", as opposed to a real HTTP answer.
-const NETWORK_ERROR_CODES = new Set([
-  'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED',
-  'ETIMEDOUT', 'ECONNABORTED', 'EPIPE', 'ERR_SOCKET_CONNECTION_TIMEOUT'
-]);
+/**
+ * Get token specifically for the UC events server with tenant subdomain
+ * @returns {Promise<string>} access token
+ */
+async function getUCToken() {
+  const baseUrl = `https://ira-spc-sj.ucprem.voicemeetme.com:9443`;
+  
+  const candidates = [
+    { url: `${baseUrl}/api/v2/config/login/oauth`, body: { domain: process.env.TENANT, username: process.env.API_USERNAME, password: process.env.API_PASSWORD } },
+    { url: `${baseUrl}/api/v2/login`, body: { domain: process.env.TENANT, username: process.env.API_USERNAME, password: process.env.API_PASSWORD } },
+    { url: `${baseUrl}/api/login`, body: { domain: process.env.TENANT, username: process.env.API_USERNAME, password: process.env.API_PASSWORD } },
+  ];
 
-const isNetworkError = err => !err.response && NETWORK_ERROR_CODES.has(err.code);
+  for (const { url, body } of candidates) {
+    for (let attempt = 0, delay = 1000; attempt < MAX_RETRIES; attempt++, delay *= 2) {
+      try {
+        const { data } = await axios.post(url, body, {
+          timeout: 720000,
+          httpsAgent,
+          headers: { Accept: 'application/json' }
+        });
+
+        const access = data.accessToken || data.access_token;
+        if (!access) throw new Error('No access token in response');
+
+        console.log(` UC server login succeeded at ${url}`);
+        return access;
+      } catch (err) {
+        if (attempt === MAX_RETRIES - 1) {
+          console.warn(`Login failed at ${url}: ${err.response?.status || err.message}`);
+        } else {
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+  }
+  throw new Error('All UC server login attempts failed – check credentials/endpoints');
+}
 
 /**
  * Filter events to show timestamps where agent state is "available" OR "Logoff" AND enabled is true
@@ -72,9 +101,9 @@ function getAvailableStateTimestamps(events) {
     event: event.event,
     state: event.state,
     timestamp: event.Timestamp,
-    // Convert timestamp to IST (Asia/Kolkata) for display
-    timestampGST: new Date(event.Timestamp * 1000).toLocaleString('en-IN', {
-      timeZone: 'Asia/Kolkata',
+    // Convert timestamp to Dubai GST for display
+    timestampGST: new Date(event.Timestamp * 1000).toLocaleString('en-AE', {
+      timeZone: 'Asia/Dubai',
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
@@ -162,8 +191,8 @@ export function getAgentLoginLogoffTimes(events) {
     if (event.event && event.event.toLowerCase() === 'agent_reg' && enabled) {
       agent.loginEvents.push({
         timestamp: timestamp,
-        timestampGST: new Date(timestamp * 1000).toLocaleString('en-IN', {
-          timeZone: 'Asia/Kolkata',
+        timestampGST: new Date(timestamp * 1000).toLocaleString('en-AE', {
+          timeZone: 'Asia/Dubai',
           day: '2-digit',
           month: '2-digit',
           year: 'numeric',
@@ -179,8 +208,8 @@ export function getAgentLoginLogoffTimes(events) {
     if (event.event && event.event.toLowerCase() === 'agent_reg' && disabled) {
       agent.logoffEvents.push({
         timestamp: timestamp,
-        timestampGST: new Date(timestamp * 1000).toLocaleString('en-IN', {
-          timeZone: 'Asia/Kolkata',
+        timestampGST: new Date(timestamp * 1000).toLocaleString('en-AE', {
+          timeZone: 'Asia/Dubai',
           day: '2-digit',
           month: '2-digit',
           year: 'numeric',
@@ -385,13 +414,14 @@ export async function fetchAgentEvents(
   acct,
   { startDate, endDate, timeRange, pageSize = 2000, startKey, filterResults = true }
 ) {
-  const tenantConfig = TENANT_CONFIG[acct];
+  const token = await getUCToken(acct);
   
-  if (!tenantConfig) {
-    throw new Error(`Tenant configuration not found for: ${acct}`);
-  }
-  
-  const headers = getApiKeyHeaders(acct);
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Accept': 'application/json',
+    'X-Account-ID': process.env.ACCOUNT_ID || acct,
+    'X-User-Agent': 'portal'
+  };
 
   const params = {
     startDate: String(startDate),
@@ -408,9 +438,10 @@ export async function fetchAgentEvents(
   const allRecords = [];
   let currentStartKey = startKey;
 
-  // Use tenant-specific base URL from config (tenantConfig already declared above)
+  // Try base server URL first (matches Stats API), then tenant subdomain
   const possibleBaseUrls = [
-    tenantConfig.base_url // Use tenant-specific base URL from config
+    `https://ira-spc-sj.ucprem.voicemeetme.com:9443`, // base server (same as Stats API)
+    `https://${acct}.ira-spc-sj.ucprem.voicemeetme.com:9443` // tenant subdomain
   ];
   
   // Try multiple possible endpoint paths
@@ -432,81 +463,55 @@ export async function fetchAgentEvents(
   let pageCount = 0;
   const MAX_PAGES = 1000; // Safety limit to prevent infinite loops
 
-  // First, find a working endpoint combination.
-  // A transient network failure (flaky DNS, reset connection) says nothing about whether
-  // an endpoint exists — treating it like a 404 permanently skips the correct path and
-  // makes the whole run fail on the fallbacks, which legitimately 404.
+  // First, find a working endpoint combination
   let endpointFound = false;
-  for (let pass = 0; pass < MAX_DISCOVERY_PASSES && !endpointFound; pass++) {
-    let sawNetworkError = false;
-
-    for (const baseUrl of possibleBaseUrls) {
-      console.log(`\n🌐 Trying base URL: ${baseUrl}`);
-
-      for (const endpoint of possibleEndpoints) {
-        console.log(`\n🔍 Trying endpoint: ${endpoint}`);
-
-        for (let i = 0, delay = 1000; i < MAX_RETRIES; i++, delay *= 2) {
-          try {
-            const fullUrl = `${baseUrl}${endpoint}`;
-            console.log(`🔍 Testing API call to: ${fullUrl}`);
-
-            const testResponse = await axios.get(fullUrl, {
-              params: { ...params, pageSize: 10 }, // Small test request
-              headers,
-              timeout: 720000, // Increased to 12 minutes (720 seconds)
-              httpsAgent
-            });
-
-            console.log(`✅ API test succeeded with status: ${testResponse.status}`);
-            successfulEndpoint = endpoint;
-            successfulBaseUrl = baseUrl;
-            endpointFound = true;
-            break;
-          } catch (err) {
-            const status = err.response?.status;
-            console.error(`❌ Test attempt ${i + 1} failed:`, status || err.code || err.message);
-
-            // 404 is a definitive "this path does not exist here" — move on immediately
-            // instead of burning the retry budget on a path we know is wrong.
-            if (status === 404) {
-              console.log(`   ↪️  Not available on this deployment (404), trying next path`);
-              break;
-            }
-
-            if (isNetworkError(err)) sawNetworkError = true;
-
-            // For 500 errors, wait longer before retrying
-            if (status === 500) {
-              console.log(`🔄 Server error (500) detected, waiting ${delay * 2}ms before retry...`);
-              await new Promise(r => setTimeout(r, delay * 2));
-            } else if (i < MAX_RETRIES - 1) {
-              await new Promise(r => setTimeout(r, delay));
-            }
-
-            if (i === MAX_RETRIES - 1) {
-              console.log(`❌ All test attempts failed for ${baseUrl}${endpoint}`);
-            }
+  for (const baseUrl of possibleBaseUrls) {
+    console.log(`\n🌐 Trying base URL: ${baseUrl}`);
+    
+    for (const endpoint of possibleEndpoints) {
+      console.log(`\n🔍 Trying endpoint: ${endpoint}`);
+      
+      for (let i = 0, delay = 1000; i < MAX_RETRIES; i++, delay *= 2) {
+        try {
+          const fullUrl = `${baseUrl}${endpoint}`;
+          console.log(`🔍 Testing API call to: ${fullUrl}`);
+          
+          const testResponse = await axios.get(fullUrl, { 
+            params: { ...params, pageSize: 10 }, // Small test request
+            headers, 
+            timeout: 720000, // Increased to 12 minutes (720 seconds)
+            httpsAgent 
+          });
+          
+          console.log(`✅ API test succeeded with status: ${testResponse.status}`);
+          successfulEndpoint = endpoint;
+          successfulBaseUrl = baseUrl;
+          endpointFound = true;
+          break;
+        } catch (err) {
+          const errorMsg = err.response?.status || err.message;
+          console.error(`❌ Test attempt ${i + 1} failed:`, errorMsg);
+          
+          // For 500 errors, wait longer before retrying
+          if (err.response?.status === 500) {
+            console.log(`🔄 Server error (500) detected, waiting ${delay * 2}ms before retry...`);
+            await new Promise(r => setTimeout(r, delay * 2));
+          } else if (i < MAX_RETRIES - 1) {
+            await new Promise(r => setTimeout(r, delay));
+          }
+          
+          if (i === MAX_RETRIES - 1) {
+            console.log(`❌ All test attempts failed for ${baseUrl}${endpoint}`);
           }
         }
-
-        if (endpointFound) break;
       }
-
+      
       if (endpointFound) break;
     }
-
-    // A sweep that failed with network errors proves nothing about the endpoints —
-    // back off and rediscover rather than giving up on a path that may well be correct.
-    if (endpointFound || !sawNetworkError) break;
-
-    if (pass < MAX_DISCOVERY_PASSES - 1) {
-      const backoff = 5000 * (pass + 1);
-      console.log(`\n🌐 Network errors during discovery — retrying full endpoint sweep in ${backoff}ms (pass ${pass + 2}/${MAX_DISCOVERY_PASSES})`);
-      await new Promise(r => setTimeout(r, backoff));
-    }
+    
+    if (endpointFound) break;
   }
-
+  
   if (!endpointFound) {
     throw new Error('All endpoint paths failed - no working agent events API found');
   }
@@ -533,7 +538,7 @@ export async function fetchAgentEvents(
         console.log(`📋 Query params:`, params);
       }
       
-      response = await axios.get(fullUrl, { params, headers, timeout: 720000, httpsAgent }); // Increased to 12 minutes (720 seconds)
+      response = await axios.get(fullUrl, { params, headers, timeout: 30000, httpsAgent });
       
       const { data } = response;
       const events = data.events || (Array.isArray(data) ? data : []);
@@ -660,12 +665,11 @@ export function generateTimeSlots(startDateTime, endDateTime) {
  * @param {Map} loginLogoffMap - Pre-calculated login/logout times for all agents (entire day)
  * @returns {object} - Report with agent time slot data
  */
-export async function generateEnhancedAgentReportFromDB(dbStatsData, dbActivitiesData, timeSlot, loginLogoffMap = null, tenant) {
+export async function generateEnhancedAgentReportFromDB(dbStatsData, dbActivitiesData, timeSlot, loginLogoffMap = null) {
   console.log(`\n📊 GENERATING ENHANCED AGENT REPORT FROM DATABASE TABLES:`);
   console.log(`   Time Slot: ${timeSlot.slotLabel}`);
   console.log(`   Start: ${new Date(timeSlot.startTime * 1000).toISOString()}`);
   console.log(`   End: ${new Date(timeSlot.endTime * 1000).toISOString()}`);
-  console.log(`   🏢 Tenant: ${tenant}`);
 
   // The dbStatsData is already filtered for this specific time slot by populate-final-hourly.js
   // So we can use it directly without additional filtering
@@ -690,19 +694,8 @@ export async function generateEnhancedAgentReportFromDB(dbStatsData, dbActivitie
   const endDateTime = new Date(timeSlot.endTime * 1000);
 
   // Use the existing generateEnhancedAgentReport function with filtered data
-  return await generateEnhancedAgentReport(slotAgentData, startDateTime, endDateTime, slotActivities, loginLogoffMap, tenant);
+  return await generateEnhancedAgentReport(slotAgentData, startDateTime, endDateTime, slotActivities, loginLogoffMap);
 }
-
-/**
- * State-duration reconciliation
- * -----------------------------
- * The stats API reports completed state durations only. When the requested
- * interval ends in the middle of a state, that trailing interval is missing
- * from the counters, and when a state started before the interval the API can
- * report the whole state against the wrong hour. Both are corrected here by
- * rebuilding the state timeline from activity events and clipping it to the
- * report boundaries.
- */
 
 const REPORT_STATE_EVENTS = new Map([
   ['agent_idle', 'idle_time'],
@@ -749,19 +742,14 @@ function fitAvailableStatesToRegisteredBudget(agent) {
 }
 
 /**
- * Reconcile an agent's state durations for one slot against its activity events.
+ * The stats API does not include an in-progress state in its duration counters
+ * when the requested interval ends in the middle of that state. Reconcile that
+ * trailing interval from activity events so calls, wrap-up, hold, idle and AUX
+ * states are clipped at the report boundary and attributed to the correct hour.
  *
- * When the event timeline covers the registered interval it replaces the stats
- * counters outright, because event intervals are clipped at both boundaries.
- * Otherwise the stats values are kept and only the positive registered-time
- * remainder is filled from the state still active at the slot end, which avoids
- * double counting a state the API already included.
- *
- * @param {object} agent - Agent stats record (registered_time, idle_time, ...)
- * @param {Array} agentEvents - This agent's activity events (not slot-filtered)
- * @param {number} slotStart - Unix timestamp of slot start
- * @param {number} slotEnd - Unix timestamp of slot end
- * @returns {object} Agent record with reconciled durations
+ * Completed state durations remain sourced from the stats API. This deliberately
+ * only fills the positive registered-time remainder, preventing double counting
+ * when the API has already included an active state.
  */
 export function reconcileTrailingAgentState(agent, agentEvents, slotStart, slotEnd) {
   const reconciled = {
@@ -979,7 +967,7 @@ export function calculateClippedEventStateDurations(agentEvents, slotStart, slot
   return totals;
 }
 
-export async function generateEnhancedAgentReport(agentData, startDateTime, endDateTime, events, loginLogoffMap = null, tenant = null) {
+export async function generateEnhancedAgentReport(agentData, startDateTime, endDateTime, events, loginLogoffMap = null) {
   console.log(`\n📊 GENERATING ENHANCED AGENT REPORT (${startDateTime.toISOString()} - ${endDateTime.toISOString()}):`);
 
   // Check if this is a single time slot (called from populate-final-hourly.js)
@@ -1063,43 +1051,38 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
     return states.join(', ');
   };
 
-  // Helper to dynamically generate state mappings and defaults from tenant config
-  const getStateMappingForTenant = (tenant) => {
-    const tenantConfig = TENANT_CONFIG[tenant];
-    const allStates = [
-      ...(tenantConfig?.productive_states || []),
-      ...(tenantConfig?.non_productive_states || [])
-    ];
-    
-    const stateMapping = {};
-    const defaultStates = {};
-    
-    allStates.forEach(state => {
-      const columnName = `customState${state.replace(/[^a-zA-Z0-9]/g, '')}`;
-      defaultStates[columnName] = '00:00:00';
-      
-      // Map both the exact state name and common variations
-      stateMapping[state] = columnName;
-      stateMapping[state.toLowerCase()] = columnName;
-      stateMapping[state.toUpperCase()] = columnName;
-      
-      // Handle variations with/without spaces
-      const noSpaces = state.replace(/\s+/g, '');
-      if (noSpaces !== state) {
-        stateMapping[noSpaces] = columnName;
-      }
-    });
-    
-    return { stateMapping, defaultStates };
-  };
-
   // Helper to extract individual custom states from the combined custom states string
-  const getIndividualCustomStatesFromCustomStatesString = (customStatesString, tenant) => {
-    const { stateMapping, defaultStates } = getStateMappingForTenant(tenant);
+  const getIndividualCustomStatesFromCustomStatesString = (customStatesString) => {
+    const defaultStates = {
+      customStateShortBreak: '00:00:00',
+      customStateBioBreak: '00:00:00',
+      customStateLunchBreak: '00:00:00',
+      customStateLogoff: '00:00:00',
+      customStateMeeting: '00:00:00',
+      customStateTraining: '00:00:00',
+      customStateTicketB2B: '00:00:00',
+      customStateTicketB2C: '00:00:00',
+      customStateChat: '00:00:00',
+      customStateLogIn: '00:00:00'
+    };
 
     if (!customStatesString || customStatesString.trim() === '') {
       return defaultStates;
     }
+
+    // Map state names to our database column names
+    const stateMapping = {
+      'Short Break': 'customStateShortBreak',
+      'Bio Break': 'customStateBioBreak', 
+      'Lunch Break': 'customStateLunchBreak',
+      'Logoff': 'customStateLogoff',
+      'Meeting': 'customStateMeeting',
+      'training': 'customStateTraining',
+      'Ticket_B2B': 'customStateTicketB2B',
+      'Ticket_B2C': 'customStateTicketB2C',
+      'Chat': 'customStateChat',
+      'Log In': 'customStateLogIn'
+    };
 
     // Parse format: [state_name : duration_seconds], [state_name : duration_seconds], ...
     const stateMatches = customStatesString.match(/\[([^:]+)\s*:\s*(\d+)\]/g);
@@ -1110,11 +1093,7 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
         const stateName = parts[0].trim();
         const durationSeconds = parseInt(parts[1].trim());
         
-        // Try to find mapping with exact match or variations
-        const mappedKey = stateMapping[stateName] || 
-                         stateMapping[stateName.toLowerCase()] ||
-                         stateMapping[stateName.toUpperCase()];
-        
+        const mappedKey = stateMapping[stateName];
         if (mappedKey && durationSeconds > 0) {
           defaultStates[mappedKey] = formatSeconds(durationSeconds);
         }
@@ -1125,19 +1104,41 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
   };
 
   // Helper to extract individual custom states from agent's not_available_detailed_report
-  const getIndividualCustomStatesFromAgentData = (agent, tenant) => {
+  const getIndividualCustomStatesFromAgentData = (agent) => {
     // First try to extract from not_available_detailed_report (for direct API calls)
     if (agent.not_available_detailed_report && typeof agent.not_available_detailed_report === 'object') {
-      const { stateMapping, defaultStates } = getStateMappingForTenant(tenant);
+      const defaultStates = {
+        customStateShortBreak: '00:00:00',
+        customStateBioBreak: '00:00:00',
+        customStateLunchBreak: '00:00:00',
+        customStateLogoff: '00:00:00',
+        customStateMeeting: '00:00:00',
+        customStateTraining: '00:00:00',
+        customStateTicketB2B: '00:00:00',
+        customStateTicketB2C: '00:00:00',
+        customStateChat: '00:00:00',
+        customStateLogIn: '00:00:00'
+      };
+
       const detailedReport = agent.not_available_detailed_report;
       
+      // Map API state names to our database column names
+      const stateMapping = {
+        'Short Break': 'customStateShortBreak',
+        'Bio Break': 'customStateBioBreak', 
+        'Lunch Break': 'customStateLunchBreak',
+        'Logoff': 'customStateLogoff',
+        'Meeting': 'customStateMeeting',
+        'training': 'customStateTraining',
+        'Ticket_B2B': 'customStateTicketB2B',
+        'Ticket_B2C': 'customStateTicketB2C',
+        'Chat': 'customStateChat',
+        'Log In': 'customStateLogIn'
+      };
+
       // Convert each state duration from seconds to HH:MM:SS format
       for (const [stateName, durationSeconds] of Object.entries(detailedReport)) {
-        // Try to find mapping with exact match or variations
-        const mappedKey = stateMapping[stateName] || 
-                         stateMapping[stateName.toLowerCase()] ||
-                         stateMapping[stateName.toUpperCase()];
-        
+        const mappedKey = stateMapping[stateName];
         if (mappedKey && durationSeconds > 0) {
           defaultStates[mappedKey] = formatSeconds(durationSeconds);
         }
@@ -1148,7 +1149,7 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
 
     // Fallback: try to extract from the combined custom states string (for database-sourced data)
     const customStatesString = getCustomStatesFromAgentData(agent);
-    return getIndividualCustomStatesFromCustomStatesString(customStatesString, tenant);
+    return getIndividualCustomStatesFromCustomStatesString(customStatesString);
   };
 
 
@@ -1177,10 +1178,6 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
   }));
 
   for (const originalAgent of agentArray) {
-    // Clip the agent's state intervals to this report window before any metric
-    // is derived, so a state spanning an hour boundary is attributed to the
-    // hours it actually occupied rather than to whichever hour the API
-    // aggregated it into.
     const originalAgentEvents = eventsByAgent.get(originalAgent.extension) || [];
     const agent = reconcileTrailingAgentState(
       originalAgent,
@@ -1302,7 +1299,7 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
 
       const agentEventsForSlot = eventsByAgent.get(agentId) || [];
       const customStates = getCustomStatesFromAgentData(agent); // Use API's not_available_detailed_report
-      const individualCustomStates = getIndividualCustomStatesFromAgentData(agent, tenant); // Extract individual custom states
+      const individualCustomStates = getIndividualCustomStatesFromAgentData(agent); // Extract individual custom states
       
       // Use registered_time from agent data as login time instead of calculating from events
       const slotLoginTime = getLoginTimeFromRegisteredTime(agent);

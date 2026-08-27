@@ -1,14 +1,10 @@
 import dotenv from 'dotenv';
 dotenv.config();
-process.env.TZ = 'Asia/Kolkata';
 
 import express from 'express';
+import fs from 'fs';
 import https from 'https';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import crypto from 'crypto';
-import cookieParser from 'cookie-parser';
-import jwt from 'jsonwebtoken';
+import http from 'http';
 import { generateEnhancedAgentReport, fetchAgentEvents } from './agentEvents.js';
 import { fetchAgentStatus } from './agentStatus.js';
 import { pool } from './database/config.js';
@@ -20,15 +16,39 @@ import {
     parseNewCustomStatesFormat
 } from './utils/stateProcessor.js';
 import { generateHourlyTimeSlots } from './utils/hourlyTimeSlots.js';
-import { TENANT_CONFIG, getAllTenants, getTenantConfig } from './tenantConfig.js';
 
-// Match CDR deployment: Node serves HTTP internally and Nginx terminates TLS.
-// Do not load the certificates in APR while it is behind the reverse proxy.
+// // SSL Certificate Management
+// const loadSSLCertificates = () => {
+//   try {
+//     const sslOptions = {
+//       key: fs.readFileSync('ssl/privkey.pem'),
+//       cert: fs.readFileSync('ssl/fullchain.pem')
+//     };
+    
+//     console.log("🔒 SSL certificates loaded successfully");
+//     return sslOptions;
+//   } catch (error) {
+//     console.error("❌ Error loading SSL certificates:", error.message);
+    
+//     // Check if SSL files exist
+//     const sslFiles = ['ssl/privkey.pem', 'ssl/fullchain.pem'];
+//     sslFiles.forEach(file => {
+//       if (!fs.existsSync(file)) {
+//         console.error(`❌ SSL file not found: ${file}`);
+//       }
+//     });
+    
+//     console.log("⚠️  Falling back to HTTP server");
+//     return null;
+//   }
+// };
+
+// NOTE: In production behind Nginx, TLS should terminate at the reverse proxy.
+// Enable direct Node HTTPS only when explicitly required.
 const sslOptions = null;
 
 const app = express();
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT = process.env.PORT || 9503;
+const PORT = process.env.PORT || 9501;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_URL = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
 
@@ -49,153 +69,8 @@ setInterval(() => {
 }, 30 * 60 * 1000); // Run every 30 minutes
 
 // Middleware
-app.set('trust proxy', 1);
-app.use(express.json()); // Add JSON parsing middleware for POST requests
-app.use(cookieParser());
-
-const REPORT_PASSWORD = process.env.REPORT_PASSWORD || process.env.Password;
-if (!REPORT_PASSWORD) {
-    throw new Error('APR report password is not configured. Set REPORT_PASSWORD (or Password) in .env.');
-}
-
-const REPORT_ACCESS_COOKIE = 'apr_report_access';
-const DEFAULT_REPORT_TENANT = process.env.DEFAULT_TENANT || getAllTenants()[0];
-const REPORT_ACCESS_SECRET = crypto
-    .createHash('sha256')
-    .update(`apr-report:${REPORT_PASSWORD}`)
-    .digest('hex');
-
-function passwordMatches(candidate) {
-    const expectedHash = crypto.createHash('sha256').update(REPORT_PASSWORD).digest();
-    const candidateHash = crypto.createHash('sha256').update(String(candidate || '')).digest();
-    return crypto.timingSafeEqual(expectedHash, candidateHash);
-}
-
-function hasReportAccess(req) {
-    const token = req.cookies?.[REPORT_ACCESS_COOKIE];
-    if (!token) return false;
-
-    try {
-        const payload = jwt.verify(token, REPORT_ACCESS_SECRET);
-        return payload?.scope === 'apr-report';
-    } catch {
-        return false;
-    }
-}
-
-app.get('/report-login', (req, res) => {
-    if (hasReportAccess(req)) {
-        return res.redirect(`/${DEFAULT_REPORT_TENANT}`);
-    }
-    res.sendFile(path.join(__dirname, 'public', 'report-login.html'));
-});
-
-app.get('/report-login-logo', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'uploads', 'logo.webp'));
-});
-
-app.post('/api/report-access/login', (req, res) => {
-    if (!passwordMatches(req.body?.password)) {
-        return res.status(401).json({ success: false, error: 'Invalid password' });
-    }
-
-    const token = jwt.sign({ scope: 'apr-report' }, REPORT_ACCESS_SECRET, { expiresIn: '12h' });
-    res.cookie(REPORT_ACCESS_COOKIE, token, {
-        httpOnly: true,
-        secure: req.secure,
-        sameSite: 'lax',
-        maxAge: 12 * 60 * 60 * 1000
-    });
-    res.json({ success: true });
-});
-
-app.post('/api/report-access/logout', (req, res) => {
-    res.clearCookie(REPORT_ACCESS_COOKIE, { httpOnly: true, secure: req.secure, sameSite: 'lax' });
-    res.json({ success: true });
-});
-
-app.use((req, res, next) => {
-    if (hasReportAccess(req)) return next();
-    if (req.path.startsWith('/api/')) {
-        return res.status(401).json({ success: false, error: 'Report password required' });
-    }
-
-    res.redirect(`/report-login?returnTo=${encodeURIComponent(`/${DEFAULT_REPORT_TENANT}`)}`);
-});
-
-// Tenant-based routing - serve index.html with tenant context
-app.get('/:tenant', (req, res, next) => {
-    const tenant = req.params.tenant.toLowerCase();
-    const validTenants = getAllTenants();
-    
-    if (validTenants.includes(tenant)) {
-        // Serve index.html and inject tenant info
-        res.sendFile('public/index.html', { root: '.' });
-    } else {
-        next(); // Not a valid tenant, continue to static files
-    }
-});
-
-// Root route - show message to add tenant name
-app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>APR</title>
-            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css" />
-            <style>
-                body { 
-                    display: flex; 
-                    align-items: center; 
-                    justify-content: center; 
-                    min-height: 100vh; 
-                    background: #f5f5f5; 
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                }
-                .message-box {
-                    background: white;
-                    padding: 3rem;
-                    border-radius: 12px;
-                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-                    text-align: center;
-                    max-width: 600px;
-                }
-                .message-box h1 {
-                    color: #363636;
-                    margin-bottom: 1rem;
-                    font-size: 1.8rem;
-                }
-                .message-box p {
-                    color: #4a4a4a;
-                    font-size: 1.1rem;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="message-box">
-                <h1>📊 Agent Performance Report</h1>
-                <p>Please add the tenant name to the URL</p>
-            </div>
-        </body>
-        </html>
-    `);
-});
-
 app.use(express.static('public'));
-
-// API endpoint to get all configured tenants
-app.get('/api/tenants', (req, res) => {
-    const tenants = Object.entries(TENANT_CONFIG).map(([key, cfg]) => ({
-        key,
-        name: cfg.name,
-        domain: cfg.domain
-    }));
-    res.json({ 
-        success: true, 
-        tenants
-    });
-});
+app.use(express.json()); // Add JSON parsing middleware for POST requests
 
 app.get('/api/enhanced-agent-report', async (req, res) => {
     const { tenant, startDateTime, endDateTime } = req.query;
@@ -233,89 +108,17 @@ app.get('/api/enhanced-agent-report', async (req, res) => {
     }
 });
 
-// Placeholder row for an hourly slot that has no stored data, so a single-agent
-// report still shows every slot in the selected range
-function buildEmptySlotRow(slot, agentInfo, queryStart, queryEnd) {
-    return {
-        _isEmptySlot: true,
-        agent_name: agentInfo.agent_name,
-        agent_extension: agentInfo.agent_extension,
-        time_slot_label: slot.slotLabel,
-        start_time: slot.startTime,
-        end_time: slot.endTime,
-        slot_start_datetime: slot.startDate.toISOString(),
-        slot_end_datetime: slot.endDate.toISOString(),
-        total_calls: 0,
-        answered_calls: 0,
-        failed_calls: 0,
-        answer_rate_percent: 0,
-        aht: '00:00:00',
-        login_time: '00:00:00',
-        available_time: '00:00:00',
-        first_login_time: null,
-        last_logout_time: null,
-        not_available_time: '00:00:00',
-        wrap_up_time: '00:00:00',
-        hold_time: '00:00:00',
-        on_call_time: '00:00:00',
-        custom_states: '',
-        custom_state_login: '00:00:00',
-        custom_state_logoff: '00:00:00',
-        custom_state_lunch_break: '00:00:00',
-        custom_state_tea_break: '00:00:00',
-        custom_state_bio: '00:00:00',
-        custom_state_short_break_1: '00:00:00',
-        custom_state_short_break_2: '00:00:00',
-        custom_state_training: '00:00:00',
-        custom_state_chat: '00:00:00',
-        custom_state_meeting: '00:00:00',
-        custom_state_downtime: '00:00:00',
-        custom_state_feedback_session: '00:00:00',
-        custom_state_floor_support: '00:00:00',
-        custom_state_gallabox: '00:00:00',
-        custom_state_lq: '00:00:00',
-        custom_state_quality_feedback: '00:00:00',
-        custom_state_query_cp: '00:00:00',
-        custom_state_query_cx: '00:00:00',
-        custom_state_setup: '00:00:00',
-        productive_break_time: '00:00:00',
-        non_productive_break_time: '00:00:00',
-        idle_time: '00:00:00',
-        report_start_time: queryStart,
-        report_end_time: queryEnd,
-        created_at: new Date(),
-        first_event_time: null,
-        last_event_time: null,
-        has_login_in_slot: false,
-        has_logout_in_slot: false
-    };
-}
-
-// Unified API endpoint for final_apr data with custom states (WITH PAGINATION)
+// Unified API endpoint for final_apr data with custom states
 app.get('/api/unified-apr-report', async (req, res) => {
     try {
-        const { tenant, start, end, agent_name, agent_extension, time_slot, page = 1, limit = 1000 } = req.query;
-
-        const MAX_PAGE_SIZE = 5000;
-        const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.min(Math.max(1, parseInt(limit) || 1000), MAX_PAGE_SIZE);
-        const offset = (pageNum - 1) * limitNum;
+        const { start, end, agent_name, agent_extension, time_slot } = req.query;
         
         console.log('📥 Unified APR Report Request:');
-        console.log('   tenant:', tenant);
         console.log('   start:', start);
         console.log('   end:', end);
         console.log('   agent_name:', agent_name);
         console.log('   agent_extension:', agent_extension);
         console.log('   time_slot:', time_slot);
-        console.log('   📄 Pagination: page', pageNum, 'limit', limitNum, 'offset', offset);
-
-        if (!tenant) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Missing required parameter: tenant' 
-            });
-        }
 
         if (!start || !end) {
             return res.status(400).json({ 
@@ -323,23 +126,6 @@ app.get('/api/unified-apr-report', async (req, res) => {
                 message: 'Missing required parameters: start and end timestamps' 
             });
         }
-        
-        // Use tenant-specific tables
-        const tableName = `agent_complete_hourly_${tenant}`;
-        const activityTableName = `agent_activity_${tenant}`;
-        
-        // Get tenant config to build dynamic custom state columns
-        const tenantConfig = TENANT_CONFIG[tenant];
-        const allStates = [
-            ...(tenantConfig?.productive_states || []),
-            ...(tenantConfig?.non_productive_states || [])
-        ];
-        
-        // Generate custom state column names dynamically
-        const customStateColumns = allStates.map(state => {
-            const columnName = `custom_state_${state.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-            return columnName;
-        }).join(',\n                ');
 
         let query = `
             SELECT 
@@ -364,25 +150,34 @@ app.get('/api/unified-apr-report', async (req, res) => {
                 hold_time,
                 on_call_time,
                 custom_states,
-                ${customStateColumns},
+                custom_state_short_break,
+                custom_state_bio_break,
+                custom_state_lunch_break,
+                custom_state_logoff,
+                custom_state_meeting,
+                custom_state_training,
+                custom_state_ticket_b2b,
+                custom_state_ticket_b2c,
+                custom_state_chat,
+                custom_state_log_in,
                 productive_break_time,
                 non_productive_break_time,
                 idle_time,
                 report_start_time,
                 report_end_time,
                 created_at
-            FROM ${tableName} 
-            WHERE start_time >= ? AND end_time <= ?
+            FROM agent_complete_hourly 
+            WHERE start_time >= ? AND start_time <= ?
         `;
         
-        // IST timezone for consistent date handling
-        const TIMEZONE = 'Asia/Kolkata';
+        // Dubai timezone for consistent date handling (same as reference code)
+        const TIMEZONE = 'Asia/Dubai';
         
         // Debug timestamp conversion
-        console.log('Frontend sent start:', start, 'which converts to IST:', new Date(start * 1000).toLocaleString('en-IN', {timeZone: TIMEZONE}));
-        console.log('Frontend sent end:', end, 'which converts to IST:', new Date(end * 1000).toLocaleString('en-IN', {timeZone: TIMEZONE}));
+        console.log('Frontend sent start:', start, 'which converts to Dubai time:', new Date(start * 1000).toLocaleString('en-AE', {timeZone: TIMEZONE}));
+        console.log('Frontend sent end:', end, 'which converts to Dubai time:', new Date(end * 1000).toLocaleString('en-AE', {timeZone: TIMEZONE}));
         
-        // Use timestamps directly since database is already in IST timezone
+        // Use timestamps directly since database is already in Dubai timezone
         const queryStart = parseInt(start);
         const queryEnd = parseInt(end);
         console.log('Using direct timestamps for database query - Start:', queryStart, 'End:', queryEnd);
@@ -400,71 +195,14 @@ app.get('/api/unified-apr-report', async (req, res) => {
             queryParams.push(`%${agent_extension}%`);
         }
 
+        // Order by agent name and time slot
         query += ' ORDER BY agent_name, start_time';
 
-        let rows;
-        let totalRecords;
-
-        if (agent_extension) {
-            // When filtering by a single agent extension the report must show every hourly
-            // slot, including slots with no stored row. Build the full slot list first and
-            // paginate over that, otherwise each page would re-add all the missing slots.
-            console.log('🔄 Filling missing hourly slots for agent extension:', agent_extension);
-
-            const [allRows] = await pool.execute(query, queryParams);
-            console.log(`📊 Database returned ${allRows.length} rows for extension ${agent_extension}`);
-
-            const allTimeSlots = generateHourlyTimeSlots(queryStart, queryEnd);
-            console.log(`📅 Generated ${allTimeSlots.length} time slots`);
-
-            const agentInfo = allRows.length > 0 ? {
-                agent_name: allRows[0].agent_name,
-                agent_extension: allRows[0].agent_extension
-            } : {
-                agent_name: 'Unknown Agent',
-                agent_extension: agent_extension
-            };
-
-            const existingRowsMap = new Map();
-            allRows.forEach(row => {
-                existingRowsMap.set(row.start_time, row);
-            });
-
-            const filledRows = allTimeSlots.map(slot => {
-                const existingRow = existingRowsMap.get(slot.startTime);
-                return existingRow || buildEmptySlotRow(slot, agentInfo, queryStart, queryEnd);
-            });
-
-            totalRecords = filledRows.length;
-            rows = filledRows.slice(offset, offset + limitNum);
-            console.log(`✅ Filled rows: ${totalRecords} (added ${totalRecords - allRows.length} missing slots)`);
-        } else {
-            // First, get total count for pagination
-            let countQuery = `
-                SELECT COUNT(*) as total
-                FROM ${tableName}
-                WHERE start_time >= ? AND end_time <= ?
-            `;
-
-            let countParams = [queryStart, queryEnd];
-
-            if (agent_name) {
-                countQuery += ' AND agent_name LIKE ?';
-                countParams.push(`%${agent_name}%`);
-            }
-
-            const [countResult] = await pool.execute(countQuery, countParams);
-            totalRecords = countResult[0].total;
-
-            const pagedQuery = `${query} LIMIT ${limitNum} OFFSET ${offset}`;
-            console.log('🔍 Executing query with params:', queryParams);
-            [rows] = await pool.execute(pagedQuery, queryParams);
-        }
-
-        const totalPages = Math.max(1, Math.ceil(totalRecords / limitNum));
-        console.log(`📊 Total records: ${totalRecords}, Total pages: ${totalPages}`);
-        console.log(`📊 Returning ${rows.length} rows (page ${pageNum}/${totalPages})`);
-
+        console.log('🔍 Executing query with params:', queryParams);
+        const [rows] = await pool.execute(query, queryParams);
+        
+        console.log(`📊 Database returned ${rows.length} rows`);
+        
         // Debug: Show what time slots we actually got
         const uniqueTimeSlots = [...new Set(rows.map(row => row.time_slot_label))].sort();
         console.log('Found time slots in database:', uniqueTimeSlots);
@@ -473,22 +211,19 @@ app.get('/api/unified-apr-report', async (req, res) => {
         // Fetch login/logout event timestamps for ALL rows (not just rows with activity)
         // This ensures we capture login/logout events even when agent didn't do any work
         console.log(`🔍 Processing ${rows.length} rows for login/logout events`);
-
+        
         const firstEventMap = new Map();
         const lastEventMap = new Map();
         const hasLoginInSlotMap = new Map();
         const hasLogoutInSlotMap = new Map();
-
+        
         for (const row of rows) {
-            // Synthetic rows stand in for slots with no stored data - nothing to look up
-            if (row._isEmptySlot) continue;
-
             const mapKey = `${row.agent_name}_${row.start_time}`;
-
+            
             try {
                 // Check for LOGIN event (agent_reg with enabled=true OR agent_not_avail_state with state='Login')
                 const [loginEvents] = await pool.execute(`
-                    SELECT event_timestamp FROM ${activityTableName} 
+                    SELECT event_timestamp FROM agent_activity 
                     WHERE agent_name = ? AND event_timestamp >= ? AND event_timestamp < ?
                       AND event_type = 'agent_not_avail_state' AND JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.state')) = 'Login'
                     ORDER BY event_timestamp ASC LIMIT 1
@@ -499,8 +234,8 @@ app.get('/api/unified-apr-report', async (req, res) => {
                 if (loginEvents.length > 0) {
                     hasLoginInSlotMap.set(mapKey, true);
                     const loginDate = new Date(loginEvents[0].event_timestamp * 1000);
-                    firstEventMap.set(mapKey, loginDate.toLocaleString('en-IN', {
-                        timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric',
+                    firstEventMap.set(mapKey, loginDate.toLocaleString('en-AE', {
+                        timeZone: 'Asia/Dubai', day: '2-digit', month: '2-digit', year: 'numeric',
                         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                     }));
                     console.log(`   Found login: ${firstEventMap.get(mapKey)}`);
@@ -508,15 +243,15 @@ app.get('/api/unified-apr-report', async (req, res) => {
                     hasLoginInSlotMap.set(mapKey, false);
                     // Get first custom state event timestamp
                     const [firstEvents] = await pool.execute(`
-                        SELECT event_timestamp FROM ${activityTableName} 
+                        SELECT event_timestamp FROM agent_activity 
                         WHERE agent_name = ? AND event_timestamp >= ? AND event_timestamp < ?
                         ORDER BY event_timestamp ASC LIMIT 1
                     `, [row.agent_name, parseInt(row.start_time), parseInt(row.end_time)]);
                     
                     if (firstEvents.length > 0) {
                         const eventDate = new Date(firstEvents[0].event_timestamp * 1000);
-                        firstEventMap.set(mapKey, eventDate.toLocaleString('en-IN', {
-                            timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric',
+                        firstEventMap.set(mapKey, eventDate.toLocaleString('en-AE', {
+                            timeZone: 'Asia/Dubai', day: '2-digit', month: '2-digit', year: 'numeric',
                             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                         }));
                     }
@@ -524,7 +259,7 @@ app.get('/api/unified-apr-report', async (req, res) => {
                 
                 // Check for LOGOUT event (agent_not_avail_state with state='none' and enabled=false)
                 const [logoutEvents] = await pool.execute(`
-                    SELECT event_timestamp FROM ${activityTableName} 
+                    SELECT event_timestamp FROM agent_activity 
                     WHERE agent_name = ? AND event_timestamp >= ? AND event_timestamp < ?
                       AND event_type = 'agent_not_avail_state' AND JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.state')) = 'none' AND CAST(JSON_EXTRACT(raw_data, '$.enabled') AS UNSIGNED) = 0
                     ORDER BY event_timestamp DESC LIMIT 1
@@ -533,23 +268,23 @@ app.get('/api/unified-apr-report', async (req, res) => {
                 if (logoutEvents.length > 0) {
                     hasLogoutInSlotMap.set(mapKey, true);
                     const logoutDate = new Date(logoutEvents[0].event_timestamp * 1000);
-                    lastEventMap.set(mapKey, logoutDate.toLocaleString('en-IN', {
-                        timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric',
+                    lastEventMap.set(mapKey, logoutDate.toLocaleString('en-AE', {
+                        timeZone: 'Asia/Dubai', day: '2-digit', month: '2-digit', year: 'numeric',
                         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                     }));
                 } else {
                     hasLogoutInSlotMap.set(mapKey, false);
                     // Fallback: Use last activity event timestamp if no logout event exists
                     const [lastActivityEvents] = await pool.execute(`
-                        SELECT event_timestamp FROM ${activityTableName} 
+                        SELECT event_timestamp FROM agent_activity 
                         WHERE JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.ext')) = ? AND event_timestamp >= ? AND event_timestamp < ?
                         ORDER BY event_timestamp DESC LIMIT 1
                     `, [row.agent_extension, parseInt(row.start_time), parseInt(row.end_time)]);
                     
                     if (lastActivityEvents.length > 0) {
                         const lastActivityDate = new Date(lastActivityEvents[0].event_timestamp * 1000);
-                        lastEventMap.set(mapKey, lastActivityDate.toLocaleString('en-IN', {
-                            timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric',
+                        lastEventMap.set(mapKey, lastActivityDate.toLocaleString('en-AE', {
+                            timeZone: 'Asia/Dubai', day: '2-digit', month: '2-digit', year: 'numeric',
                             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                         }));
                     }
@@ -561,13 +296,8 @@ app.get('/api/unified-apr-report', async (req, res) => {
 
         // Process each row to enhance custom_states with durations
         const enhancedRows = rows.map(row => {
-            if (row._isEmptySlot) {
-                const { _isEmptySlot, ...emptyRow } = row;
-                return emptyRow;
-            }
-
             let enhancedCustomStates = row.custom_states;
-
+            
             try {
                 // Debug: Log the original custom_states data
                 // console.log('Original custom_states for row:', row.agent_name, row.time_slot_label, ':', row.custom_states);
@@ -618,20 +348,100 @@ app.get('/api/unified-apr-report', async (req, res) => {
             };
         });
 
-        const finalRows = enhancedRows;
+        // If filtering by specific agent_extension, ensure all 24 hourly slots are present
+        let finalRows = enhancedRows;
+        if (agent_extension) {
+            console.log('🔄 Filling missing hourly slots for agent extension:', agent_extension);
+            
+            // Generate all 24 hourly slots for the date range
+            const allTimeSlots = generateHourlyTimeSlots(queryStart, queryEnd);
+            console.log(`📅 Generated ${allTimeSlots.length} time slots`);
+            
+            // Get agent info from first row or use extension from query
+            const agentInfo = enhancedRows.length > 0 ? {
+                agent_name: enhancedRows[0].agent_name,
+                agent_extension: enhancedRows[0].agent_extension
+            } : {
+                agent_name: 'Unknown Agent',
+                agent_extension: agent_extension
+            };
+            
+            // Create a map of existing rows by start_time
+            const existingRowsMap = new Map();
+            enhancedRows.forEach(row => {
+                existingRowsMap.set(row.start_time, row);
+            });
+            
+            // Fill in all time slots
+            finalRows = allTimeSlots.map(slot => {
+                const existingRow = existingRowsMap.get(slot.startTime);
+                
+                if (existingRow) {
+                    return existingRow;
+                } else {
+                    // Create empty row for missing slot
+                    return {
+                        agent_name: agentInfo.agent_name,
+                        agent_extension: agentInfo.agent_extension,
+                        time_slot_label: slot.slotLabel,
+                        start_time: slot.startTime,
+                        end_time: slot.endTime,
+                        slot_start_datetime: slot.startDate.toISOString(),
+                        slot_end_datetime: slot.endDate.toISOString(),
+                        total_calls: 0,
+                        answered_calls: 0,
+                        failed_calls: 0,
+                        answer_rate_percent: 0,
+                        aht: '00:00:00',
+                        login_time: '00:00:00',
+                        available_time: '00:00:00',
+                        first_login_time: null,
+                        last_logout_time: null,
+                        not_available_time: '00:00:00',
+                        wrap_up_time: '00:00:00',
+                        hold_time: '00:00:00',
+                        on_call_time: '00:00:00',
+                        custom_states: '',
+                        custom_state_login: '00:00:00',
+                        custom_state_logoff: '00:00:00',
+                        custom_state_lunch_break: '00:00:00',
+                        custom_state_tea_break: '00:00:00',
+                        custom_state_bio: '00:00:00',
+                        custom_state_short_break_1: '00:00:00',
+                        custom_state_short_break_2: '00:00:00',
+                        custom_state_training: '00:00:00',
+                        custom_state_chat: '00:00:00',
+                        custom_state_meeting: '00:00:00',
+                        custom_state_downtime: '00:00:00',
+                        custom_state_feedback_session: '00:00:00',
+                        custom_state_floor_support: '00:00:00',
+                        custom_state_gallabox: '00:00:00',
+                        custom_state_lq: '00:00:00',
+                        custom_state_quality_feedback: '00:00:00',
+                        custom_state_query_cp: '00:00:00',
+                        custom_state_query_cx: '00:00:00',
+                        custom_state_setup: '00:00:00',
+                        productive_break_time: '00:00:00',
+                        non_productive_break_time: '00:00:00',
+                        idle_time: '00:00:00',
+                        report_start_time: queryStart,
+                        report_end_time: queryEnd,
+                        created_at: new Date(),
+                        first_event_time: null,
+                        last_event_time: null,
+                        has_login_in_slot: false,
+                        has_logout_in_slot: false
+                    };
+                }
+            });
+            
+            console.log(`✅ Final rows count: ${finalRows.length} (filled ${finalRows.length - enhancedRows.length} missing slots)`);
+        }
 
         res.json({
             success: true,
             data: finalRows,
             count: finalRows.length,
-            pagination: {
-                page: pageNum,
-                limit: limitNum,
-                totalRecords: totalRecords,
-                totalPages: totalPages,
-                hasNextPage: pageNum < totalPages,
-                hasPrevPage: pageNum > 1
-            },
             filters: {
                 start_timestamp: start,
                 end_timestamp: end,
@@ -680,6 +490,7 @@ app.get('/api/apr-reports', async (req, res) => {
                         failed_calls,
                         aht,
                         login_time,
+                        available_time,
                         first_login_time,
                         last_logout_time,
                         not_available_time,
@@ -706,7 +517,7 @@ app.get('/api/apr-reports', async (req, res) => {
                         time_slot_end,
                         raw_data,
                         created_at
-                    FROM ${activityTableName} 
+                    FROM agent_activity 
                     WHERE time_slot_start >= ? AND time_slot_end <= ?
                 `;
                 queryParams = [start, end];
@@ -811,6 +622,7 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
             answer_rate_percent,
             aht,
             login_time,
+            available_time,
             first_login_time,
             last_logout_time,
             not_available_time,
@@ -818,25 +630,16 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
             hold_time,
             on_call_time,
             custom_states,
-            custom_state_login,
-            custom_state_logoff,
+            custom_state_short_break,
+            custom_state_bio_break,
             custom_state_lunch_break,
-            custom_state_tea_break,
-            custom_state_bio,
-            custom_state_short_break_1,
-            custom_state_short_break_2,
-            custom_state_training,
-            custom_state_chat,
+            custom_state_logoff,
             custom_state_meeting,
-            custom_state_downtime,
-            custom_state_feedback_session,
-            custom_state_floor_support,
-            custom_state_gallabox,
-            custom_state_lq,
-            custom_state_quality_feedback,
-            custom_state_query_cp,
-            custom_state_query_cx,
-            custom_state_setup,
+            custom_state_training,
+            custom_state_ticket_b2b,
+            custom_state_ticket_b2c,
+            custom_state_chat,
+            custom_state_log_in,
             productive_break_time,
             non_productive_break_time,
             idle_time,
@@ -903,7 +706,7 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                 // Check for LOGIN event (agent_reg with enabled=true)
                 const [loginEvents] = await pool.execute(`
                     SELECT event_timestamp
-                    FROM ${activityTableName} 
+                    FROM agent_activity 
                     WHERE agent_name = ? 
                       AND event_timestamp >= ?
                       AND event_timestamp < ?
@@ -917,8 +720,8 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                     hasLoginInSlotMap.set(mapKey, true);
                     const loginTimestamp = loginEvents[0].event_timestamp;
                     const loginDate = new Date(loginTimestamp * 1000);
-                    const formattedLogin = loginDate.toLocaleString('en-IN', {
-                        timeZone: 'Asia/Kolkata',
+                    const formattedLogin = loginDate.toLocaleString('en-AE', {
+                        timeZone: 'Asia/Dubai',
                         day: '2-digit', month: '2-digit', year: 'numeric',
                         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                     });
@@ -928,15 +731,15 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                     hasLoginInSlotMap.set(mapKey, false);
                     // Get first custom state event timestamp
                     const [firstEvents] = await pool.execute(`
-                        SELECT event_timestamp FROM ${activityTableName} 
+                        SELECT event_timestamp FROM agent_activity 
                         WHERE agent_name = ? AND event_timestamp >= ? AND event_timestamp < ?
                         ORDER BY event_timestamp ASC LIMIT 1
                     `, [row.agent_name, parseInt(row.start_time), parseInt(row.end_time)]);
                     
                     if (firstEvents.length > 0) {
                         const eventDate = new Date(firstEvents[0].event_timestamp * 1000);
-                        const formattedTime = eventDate.toLocaleString('en-IN', {
-                            timeZone: 'Asia/Kolkata',
+                        const formattedTime = eventDate.toLocaleString('en-AE', {
+                            timeZone: 'Asia/Dubai',
                             day: '2-digit', month: '2-digit', year: 'numeric',
                             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                         });
@@ -950,7 +753,7 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                 // Check for LOGOUT event (agent_reg with enabled=false)
                 const [logoutEvents] = await pool.execute(`
                     SELECT event_timestamp
-                    FROM ${activityTableName} 
+                    FROM agent_activity 
                     WHERE JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.ext')) = ? 
                       AND event_timestamp >= ?
                       AND event_timestamp < ?
@@ -964,8 +767,8 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                     hasLogoutInSlotMap.set(mapKey, true);
                     const logoutTimestamp = logoutEvents[0].event_timestamp;
                     const logoutDate = new Date(logoutTimestamp * 1000);
-                    lastEventMap.set(mapKey, logoutDate.toLocaleString('en-IN', {
-                        timeZone: 'Asia/Kolkata',
+                    lastEventMap.set(mapKey, logoutDate.toLocaleString('en-AE', {
+                        timeZone: 'Asia/Dubai',
                         day: '2-digit', month: '2-digit', year: 'numeric',
                         hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                     }));
@@ -974,7 +777,7 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                     // Fallback: Use last activity event timestamp if no logout event exists
                     const [lastActivityEvents] = await pool.execute(`
                         SELECT event_timestamp
-                        FROM ${activityTableName} 
+                        FROM agent_activity 
                         WHERE JSON_UNQUOTE(JSON_EXTRACT(raw_data, '$.ext')) = ? 
                           AND event_timestamp >= ?
                           AND event_timestamp < ?
@@ -985,8 +788,8 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
                     if (lastActivityEvents.length > 0) {
                         const lastActivityTimestamp = lastActivityEvents[0].event_timestamp;
                         const lastActivityDate = new Date(lastActivityTimestamp * 1000);
-                        lastEventMap.set(mapKey, lastActivityDate.toLocaleString('en-IN', {
-                            timeZone: 'Asia/Kolkata',
+                        lastEventMap.set(mapKey, lastActivityDate.toLocaleString('en-AE', {
+                            timeZone: 'Asia/Dubai',
                             day: '2-digit', month: '2-digit', year: 'numeric',
                             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
                         }));
@@ -999,7 +802,7 @@ async function queryUnifiedAPRReport(params, countOnly = false) {
     }
     
     // Process each row to enhance custom_states with durations (same as original logic)
-    const enhancedRows = rows.map(row => {  
+    const enhancedRows = rows.map(row => {
         let enhancedCustomStates = row.custom_states;
         
         try {
@@ -1159,20 +962,11 @@ app.get('/api/reports/progressive', async (req, res) => {
 // Get unique agent names for autocomplete (using agent_complete_hourly table)
 app.get('/api/agents/names', async (req, res) => {
     try {
-        const { tenant, search } = req.query;
-        
-        if (!tenant) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Missing required parameter: tenant' 
-            });
-        }
-        
-        const tableName = `agent_complete_hourly_${tenant}`;
+        const { search } = req.query;
         
         let query = `
             SELECT DISTINCT agent_name 
-            FROM ${tableName} 
+            FROM agent_complete_hourly 
             WHERE agent_name IS NOT NULL AND agent_name != ''
         `;
         
@@ -1203,20 +997,11 @@ app.get('/api/agents/names', async (req, res) => {
 // Get unique agent extensions for autocomplete (using agent_complete_hourly table)
 app.get('/api/agents/extensions', async (req, res) => {
     try {
-        const { tenant, search } = req.query;
-        
-        if (!tenant) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Missing required parameter: tenant' 
-            });
-        }
-        
-        const tableName = `agent_complete_hourly_${tenant}`;
+        const { search } = req.query;
         
         let query = `
             SELECT DISTINCT agent_extension 
-            FROM ${tableName} 
+            FROM agent_complete_hourly 
             WHERE agent_extension IS NOT NULL AND agent_extension != ''
         `;
         
@@ -1244,47 +1029,8 @@ app.get('/api/agents/extensions', async (req, res) => {
     }
 });
 
-// Get tenant configuration (custom states, etc.)
-app.get('/api/tenant/config', async (req, res) => {
-    try {
-        const { tenant } = req.query;
-        
-        if (!tenant) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Missing required parameter: tenant' 
-            });
-        }
-        
-        const tenantConfig = TENANT_CONFIG[tenant];
-        
-        if (!tenantConfig) {
-            return res.status(404).json({ 
-                success: false, 
-                message: `Tenant configuration not found for: ${tenant}` 
-            });
-        }
-        
-        // Return only the necessary config for frontend
-        res.json({
-            success: true,
-            data: {
-                tenant: tenant,
-                productive_states: tenantConfig.productive_states || [],
-                non_productive_states: tenantConfig.non_productive_states || []
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching tenant config:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to fetch tenant configuration' 
-        });
-    }
-});
-
-// Retained for parity with CDR; sslOptions is null in the Nginx deployment.
-const useHTTPS = PUBLIC_URL.startsWith('https://');
+// Only use HTTPS when explicitly enabled for direct Node termination.
+const useHTTPS = process.env.ENABLE_NODE_HTTPS === 'true';
 
 if (sslOptions && useHTTPS) {
   const server = https.createServer(sslOptions, app);
@@ -1305,11 +1051,7 @@ if (sslOptions && useHTTPS) {
 } else {
   const server = app.listen(PORT, HOST, () => {
     console.log(`🌐 HTTP server running at ${PUBLIC_URL}`);
-    if (!useHTTPS) {
-      console.log(`⚠️  Running in HTTP mode (PUBLIC_URL is set to HTTP)`);
-    } else {
-      console.log(`⚠️  Running in HTTP mode (no SSL certificates found)`);
-    }
+    console.log(`⚠️  Running in HTTP mode (TLS expected via Nginx/reverse proxy)`);
   });
   
   server.on('error', (err) => {
@@ -1322,3 +1064,14 @@ if (sslOptions && useHTTPS) {
     process.exit(1);
   });
 }
+
+// Graceful shutdown handlers
+process.on('SIGINT', () => {
+  console.log('\n⚠️ Received SIGINT (Ctrl+C). Shutting down gracefully...');
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n⚠️ Received SIGTERM. Shutting down gracefully...');
+  process.exit(0);
+});
