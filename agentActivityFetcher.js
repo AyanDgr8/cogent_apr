@@ -82,11 +82,8 @@ async function fetchPage(url, tenant, params) {
   // Add pageSize parameter to maximize efficiency
   formattedParams.pageSize = 2000;
   
-  // Use the actual account ID from env for API calls
-  const queryParams = new URLSearchParams({
-    account: tenantConfig.account_id,
-    ...formattedParams
-  });
+  // Account identity is supplied by x-account-id, matching the report API curl.
+  const queryParams = new URLSearchParams(formattedParams);
   
   const fullUrl = `${tenantConfig.base_url}${url}?${queryParams}`;
   
@@ -107,10 +104,8 @@ async function fetchPage(url, tenant, params) {
       const errorText = await response.text();
       console.error(`❌ API Error Response Body:`, errorText);
       
-      // Handle 401 (unauthorized) - token might be expired
       if (response.status === 401) {
-        console.warn(`⚠️ 401 Unauthorized - token may be expired, will retry with fresh token`);
-        throw new Error(`RETRY_AUTH:API request failed: ${response.status} ${response.statusText} - ${errorText}`);
+        throw new Error(`API key authentication failed: ${response.status} ${response.statusText} - ${errorText}`);
       }
       
       throw new Error(`API request failed: ${response.status} ${response.statusText} - ${errorText}`);

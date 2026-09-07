@@ -1192,6 +1192,10 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
     const agentName = agent.name || 'Unknown Agent';
     const totalCalls = agent.total_calls || 0;
     const answeredCalls = agent.answered_calls || 0;
+    const totalInboundCalls = agent.total_inbound_calls || 0;
+    const answeredInboundCalls = agent.answered_inbound_calls || 0;
+    const totalOutboundCalls = agent.total_outbound_calls || 0;
+    const answeredOutboundCalls = agent.answered_outbound_calls || 0;
 
     const agentLoginInfo = loginLogoffMap.get(agentId) || {};
 
@@ -1282,6 +1286,18 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
         slotAnswered = 0;
         slotFailed = 0;
       }
+
+      // Apply the same active-slot distribution to the direction-specific API totals.
+      const distribute = value => {
+        if (!isActiveSlot) return 0;
+        if (isSingleSlot || slotsWithActivity.length <= 1) return value;
+        const base = Math.floor(value / slotsWithActivity.length);
+        return base + (activeSlotIndex < value % slotsWithActivity.length ? 1 : 0);
+      };
+      const slotTotalInbound = distribute(totalInboundCalls);
+      const slotAnsweredInbound = distribute(answeredInboundCalls);
+      const slotTotalOutbound = distribute(totalOutboundCalls);
+      const slotAnsweredOutbound = distribute(answeredOutboundCalls);
       
       // Calculate AHT (Average Handle Time) = (talked_time + wrap_up_time + hold_time) / total_calls
       const talkedTimeSeconds = agent.talked_time || agent.on_call_time || 0;
@@ -1318,6 +1334,12 @@ export async function generateEnhancedAgentReport(agentData, startDateTime, endD
         totalCalls: slotCalls,
         answeredCalls: slotAnswered,
         failedCalls: slotFailed,
+        totalInboundCalls: slotTotalInbound,
+        answeredInboundCalls: slotAnsweredInbound,
+        failedInboundCalls: Math.max(0, slotTotalInbound - slotAnsweredInbound),
+        totalOutboundCalls: slotTotalOutbound,
+        answeredOutboundCalls: slotAnsweredOutbound,
+        failedOutboundCalls: Math.max(0, slotTotalOutbound - slotAnsweredOutbound),
         aht: ahtFormatted,
         loginTime: slotLoginTime,
         availableTime: slotAvailableTime,

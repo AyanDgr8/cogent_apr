@@ -518,7 +518,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     function setupTableHeaders() {
         const headers = [
             'S.No.', 'Agent Name', 'Extension', 'Time Slot', 'Total Calls', 'Answered Calls', 
-            'Failed Calls', 'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time', 
+            'Failed Calls', 'Total Inbound Calls', 'Answered Inbound Calls', 'Failed Inbound Calls',
+            'Total Outbound Calls', 'Answered Outbound Calls', 'Failed Outbound Calls',
+            'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time',
             'Not Available Time', 'Idle Time', 'Wrap Up Time', 'Hold Time', 'On Call Time', 
             'Productive Break Time', 'Non-Productive Break Time', 'Custom States'
         ];
@@ -558,6 +560,12 @@ document.addEventListener('DOMContentLoaded', async function() {
                     <td>${row.total_calls || 0}</td>
                     <td>${row.answered_calls || 0}</td>
                     <td>${row.failed_calls || 0}</td>
+                    <td>${row.total_inbound_calls || 0}</td>
+                    <td>${row.answered_inbound_calls || 0}</td>
+                    <td>${row.failed_inbound_calls || 0}</td>
+                    <td>${row.total_outbound_calls || 0}</td>
+                    <td>${row.answered_outbound_calls || 0}</td>
+                    <td>${row.failed_outbound_calls || 0}</td>
                     <td>${row.aht || 'N/A'}</td>
                     <td>${formatFirstLogin(row)}</td>
                     <td>${formatLastLogout(row, fullDataset, actualIndex)}</td>
@@ -678,7 +686,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Add unified headers including S.No. and custom states
         const headers = [
             'S.No.', 'Agent Name', 'Extension', 'Time Slot', 'Total Calls', 'Answered Calls', 
-            'Failed Calls', 'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time', 
+            'Failed Calls', 'Total Inbound Calls', 'Answered Inbound Calls', 'Failed Inbound Calls',
+            'Total Outbound Calls', 'Answered Outbound Calls', 'Failed Outbound Calls',
+            'AHT', 'Login Timestamp', 'Logout Timestamp', 'Login Time',
             'Not Available Time','Idle Time', 'Wrap Up Time', 'Hold Time', 'On Call Time', 
             'Productive Break Time', 'Non-Productive Break Time', 'Custom States'
         ];
@@ -694,6 +704,12 @@ document.addEventListener('DOMContentLoaded', async function() {
                 row.total_calls || 0,
                 row.answered_calls || 0,
                 row.failed_calls || 0,
+                row.total_inbound_calls || 0,
+                row.answered_inbound_calls || 0,
+                row.failed_inbound_calls || 0,
+                row.total_outbound_calls || 0,
+                row.answered_outbound_calls || 0,
+                row.failed_outbound_calls || 0,
                 escapeCSV(row.aht || '00:00:00'),
                 escapeCSV(formatFirstLoginForCSV(row)),
                 escapeCSV(formatLastLogoutForCSV(row, currentData, index)),

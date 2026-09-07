@@ -227,11 +227,23 @@ export async function fetchAgentStatus(
         httpsAgent
       });
 
-      const ensureExt = r => ({
-        extension: r.extension ?? r.ext ?? r.userId ?? r.user_id ?? r.id ?? '',
-        registered_time: r.registered_time || 0, // Preserve login time from API
-        ...r
-      });
+      const ensureExt = r => {
+        const totalInbound = Number(r.total_inbound_calls) || 0;
+        const answeredInbound = Number(r.answered_inbound_calls) || 0;
+        const totalOutbound = Number(r.total_outbound_calls) || 0;
+        const answeredOutbound = Number(r.answered_outbound_calls) || 0;
+        return {
+          ...r,
+          extension: r.extension ?? r.ext ?? r.userId ?? r.user_id ?? r.id ?? '',
+          registered_time: r.registered_time || 0,
+          total_inbound_calls: totalInbound,
+          answered_inbound_calls: answeredInbound,
+          failed_inbound_calls: Math.max(0, totalInbound - answeredInbound),
+          total_outbound_calls: totalOutbound,
+          answered_outbound_calls: answeredOutbound,
+          failed_outbound_calls: Math.max(0, totalOutbound - answeredOutbound)
+        };
+      };
 
       // Stats API returns object keyed by extension (as shown in your example)
       if (data && typeof data === 'object' && !Array.isArray(data)) {

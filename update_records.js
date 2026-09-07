@@ -160,6 +160,27 @@ async function migrateTenant(tenant) {
     }
 
     // 1b. per-tenant custom state columns
+    const callDirectionColumns = [
+        ['total_inbound_calls', 'Total inbound calls'],
+        ['answered_inbound_calls', 'Answered inbound calls'],
+        ['failed_inbound_calls', 'Failed inbound calls'],
+        ['total_outbound_calls', 'Total outbound calls'],
+        ['answered_outbound_calls', 'Answered outbound calls'],
+        ['failed_outbound_calls', 'Failed outbound calls']
+    ];
+    for (const [column, comment] of callDirectionColumns) {
+        if (await columnExists(hourlyTable, column)) continue;
+        await pool.query(`
+            ALTER TABLE \`${hourlyTable}\`
+            ADD COLUMN \`${column}\` INT NOT NULL DEFAULT 0
+            COMMENT ${pool.escape(comment)}
+            AFTER failed_calls
+        `);
+        changes.push(`${hourlyTable}.${column} added`);
+        console.log(`   ➕ ${hourlyTable}.${column} added`);
+    }
+
+    // 1c. per-tenant custom state columns
     const { all: allStates } = tenantStates(tenant);
     for (const state of allStates) {
         const column = stateColumnName(state);
@@ -173,7 +194,7 @@ async function migrateTenant(tenant) {
         console.log(`   ➕ ${hourlyTable}.${column} added (state "${state}")`);
     }
 
-    // 1c. widen the activity uniqueness key
+    // 1d. widen the activity uniqueness key
     if (await tableExists(activityTable)) {
         const current = await indexColumns(activityTable, 'unique_agent_activity');
         if (current.join(',') === ACTIVITY_UNIQUE_KEY.join(',')) {

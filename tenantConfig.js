@@ -1,9 +1,9 @@
 export const TENANT_CONFIG = {
   hth: {
     name: 'hth',
-    base_url: ('hth', 'API_BASE_URL', 'https://uc.cogentlab.com:9443'),
-    account_id: ('hth', 'ACCOUNT_ID', '508cebbc46bf3e4d42b80b174c2035c3'),
-    api_key: ('hth', 'API_KEY', '671dfbc7f16de08627ff870db50734a164419a6c096a34cb7ec576f9788e69de'),
+    base_url: process.env.API_BASE_URL || 'https://uc.cogentlab.com:9443',
+    account_id: process.env.ACCOUNT_ID || '508cebbc46bf3e4d42b80b174c2035c3',
+    api_key: process.env.API_KEY || '671dfbc7f16de08627ff870db50734a164419a6c096a34cb7ec576f9788e69de',
     domain: 'cogent',
     productive_states: [
       'Manual',
