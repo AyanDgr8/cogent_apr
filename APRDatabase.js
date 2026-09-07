@@ -24,7 +24,7 @@ const DB_CONFIG = {
   multipleStatements: true
 };
 
-const DB_NAME = process.env.DB_NAME || 'AGENT_REPORT_COGENT';
+const DB_NAME = process.env.DB_NAME || 'AGENT_REPORTS_COGENT';
 
 // ─── DDL builders for APR tables ───────────────────────────────────────────
 
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS agent_activity_${suffix} (
     INDEX idx_agent_time (agent_name, event_timestamp),
     INDEX idx_agent_slot (agent_name, time_slot_start, time_slot_end),
     INDEX idx_slot_state (time_slot_start, time_slot_end, event_state),
-    UNIQUE KEY unique_agent_activity (agent_name, event_timestamp)
+    UNIQUE KEY unique_agent_activity (agent_name, event_timestamp, event_type, event_state)
 );`;
 }
 
@@ -146,13 +146,32 @@ async function main() {
 
   try {
     await conn.query("SET time_zone = '+05:30'");
-    // 1. Create database
-    console.log(`\n📦 Ensuring database ${DB_NAME} exists...`);
-    await conn.query(
-      `CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
-    );
-    await conn.query(`USE \`${DB_NAME}\`;`);
-    console.log(`✅ Using database: ${DB_NAME}`);
+    // 1. Prefer an existing database. Production application users commonly
+    // have table privileges but no global CREATE DATABASE privilege.
+    console.log(`\n📦 Connecting to database ${DB_NAME}...`);
+    try {
+      await conn.query(`USE \`${DB_NAME}\`;`);
+    } catch (err) {
+      if (err.code !== 'ER_BAD_DB_ERROR') throw err;
+
+      console.log(`Database ${DB_NAME} does not exist; attempting to create it...`);
+      try {
+        await conn.query(
+          `CREATE DATABASE \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
+        );
+        await conn.query(`USE \`${DB_NAME}\`;`);
+      } catch (createErr) {
+        if (createErr.code === 'ER_DBACCESS_DENIED_ERROR' || createErr.code === 'ER_ACCESS_DENIED_ERROR') {
+          throw new Error(
+            `Database ${DB_NAME} does not exist or is not accessible, and user ${DB_CONFIG.user} ` +
+            `cannot create it. Set DB_NAME to the exact existing database name (case-sensitive on Linux), ` +
+            `or ask a MySQL administrator to create it and grant privileges.`
+          );
+        }
+        throw createErr;
+      }
+    }
+    console.log(`✅ Using existing database: ${DB_NAME}`);
 
     // 2. Shared users table
     console.log('\n👤 Creating shared tables...');

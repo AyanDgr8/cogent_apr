@@ -1,21 +1,23 @@
 // populate-service.js
-// A robust service script to automatically populate the Meydan agent database at regular intervals
-// Usage: node meydan-populate-service.js [intervalMinutes] [lookbackHours]
-// Example: node meydan-populate-service.js 5 1
+// Scheduled population service for the configured APR tenant.
 
 import dotenv from 'dotenv';
 import { populateAllTablesHourly } from './populate-final-hourly.js';
 import { testConnection } from './database/config.js';
 import fs from 'fs';
 import path from 'path';
+import { getAllTenants, getTenantConfig, getTenantTableSuffix } from './tenantConfig.js';
 
 dotenv.config();
 process.env.TZ = 'Asia/Kolkata';
 
 // Default configuration
 const DEFAULT_INTERVAL_MINUTES = 5;
-const LOG_FILE = path.join(process.cwd(), 'meydan-populate-service.log');
-const STATUS_FILE = path.join(process.cwd(), 'meydan-populate-status.json');
+const ACTIVE_TENANT = (process.env.TENANT || process.env.DEFAULT_TENANT || getAllTenants()[0]).toLowerCase();
+getTenantConfig(ACTIVE_TENANT); // Fail immediately on a typo instead of running with undefined.
+const TABLE_SUFFIX = getTenantTableSuffix(ACTIVE_TENANT);
+const LOG_FILE = path.join(process.cwd(), `${TABLE_SUFFIX}-populate-service.log`);
+const STATUS_FILE = path.join(process.cwd(), `${TABLE_SUFFIX}-populate-status.json`);
 
 // Parse command line arguments
 function parseArgs() {
@@ -88,9 +90,9 @@ async function checkAgentTables() {
   const { pool } = await import('./database/config.js');
   
   const tables = [
-    'agent_stats',
-    'agent_activity', 
-    'agent_complete_hourly'
+    `agent_stats_${TABLE_SUFFIX}`,
+    `agent_activity_${TABLE_SUFFIX}`,
+    `agent_complete_hourly_${TABLE_SUFFIX}`
   ];
   
   const counts = {};
@@ -167,11 +169,11 @@ function formatTimestamp(timestamp) {
   });
 }
 
-// Main function to populate Meydan agent database
-async function populateMeydanDatabase() {
+// Main function to populate the configured tenant database
+async function populateTenantDatabase() {
   const startTime = Date.now();
-  const runId = `meydan-run-${Date.now()}`;
-  log(`Starting Meydan agent database population process (ID: ${runId})...`);
+  const runId = `${TABLE_SUFFIX}-run-${Date.now()}`;
+  log(`Starting ${ACTIVE_TENANT} agent database population process (ID: ${runId})...`);
   
   try {
     // Step 1: Check database connection
@@ -192,14 +194,14 @@ async function populateMeydanDatabase() {
     const beforeCounts = await checkAgentTables();
     
     // Step 4: Run the populate process
-    log('Step 4: Running Meydan agent data population...');
-    log(`Executing: populateAllTablesHourly(${dbStartTime}, ${dbEndTime})`);
+    log(`Step 4: Running ${ACTIVE_TENANT} agent data population...`);
+    log(`Executing: populateAllTablesHourly(${dbStartTime}, ${dbEndTime}, ${ACTIVE_TENANT})`);
     
     // Run the populate function with progressive loading
-    const populateResult = await populateAllTablesHourly(dbStartTime, dbEndTime);
+    const populateResult = await populateAllTablesHourly(dbStartTime, dbEndTime, ACTIVE_TENANT);
     
     if (populateResult) {
-      log('Meydan agent data population completed successfully', 'success');
+      log(`${ACTIVE_TENANT} agent data population completed successfully`, 'success');
     } else {
       throw new Error('Population function returned false');
     }
@@ -240,7 +242,7 @@ async function populateMeydanDatabase() {
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     const nextRunTime = new Date(Date.now() + (config.intervalMinutes * 60 * 1000));
     
-    log(`🎉 Meydan agent database population completed successfully in ${duration}s!`, 'success');
+    log(`🎉 ${ACTIVE_TENANT} agent database population completed successfully in ${duration}s!`, 'success');
     log(`📅 Next population scheduled for: ${nextRunTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST (in ${config.intervalMinutes} minutes)`, 'success');
     
     // Update status file with last successful run
@@ -261,7 +263,7 @@ async function populateMeydanDatabase() {
     
     return true;
   } catch (error) {
-    log(`Error in Meydan database population process (ID: ${runId}): ${error.message}`, 'error');
+    log(`Error in ${ACTIVE_TENANT} database population process (ID: ${runId}): ${error.message}`, 'error');
     log(error.stack, 'error');
     
     // Update status file with error information
@@ -284,10 +286,10 @@ async function cleanupDuplicateRecords() {
     
     log('Cleaning up duplicate records (last hour)...');
     
-    // Clean up duplicates in agent_complete_hourly table (only last hour)
+    // Clean up duplicates in the tenant's hourly table (only last hour)
     const cleanupQuery = `
-      DELETE t1 FROM agent_complete_hourly t1
-      INNER JOIN agent_complete_hourly t2 
+      DELETE t1 FROM agent_complete_hourly_${TABLE_SUFFIX} t1
+      INNER JOIN agent_complete_hourly_${TABLE_SUFFIX} t2
       WHERE t1.id < t2.id 
       AND t1.agent_extension = t2.agent_extension 
       AND t1.start_time = t2.start_time 
@@ -312,14 +314,14 @@ async function verifyDataQuality() {
   try {
     const { pool } = await import('./database/config.js');
     
-    // Check for recent data in agent_complete_hourly
+    // Check for recent data in the tenant's hourly table
     const recentDataQuery = `
       SELECT 
         COUNT(*) as total_records,
         COUNT(DISTINCT agent_name) as unique_agents,
         MIN(start_time) as earliest_time,
         MAX(end_time) as latest_time
-      FROM agent_complete_hourly 
+      FROM agent_complete_hourly_${TABLE_SUFFIX}
       WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
     `;
     
@@ -337,7 +339,7 @@ async function verifyDataQuality() {
     // Check for agents with call activity
     const activeAgentsQuery = `
       SELECT COUNT(*) as active_agents
-      FROM agent_complete_hourly 
+      FROM agent_complete_hourly_${TABLE_SUFFIX}
       WHERE total_calls > 0 
       AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
     `;
@@ -348,7 +350,7 @@ async function verifyDataQuality() {
     // Check for custom states data
     const customStatesQuery = `
       SELECT COUNT(*) as records_with_states
-      FROM agent_complete_hourly 
+      FROM agent_complete_hourly_${TABLE_SUFFIX}
       WHERE custom_states IS NOT NULL 
       AND custom_states != ''
       AND created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
@@ -393,7 +395,7 @@ function updateStatusFile(status) {
 // Function to run the service with error handling and recovery
 async function runService() {
   try {
-    await populateMeydanDatabase();
+    await populateTenantDatabase();
   } catch (error) {
     log(`Critical service error: ${error.message}`, 'error');
     log(error.stack, 'error');
@@ -441,7 +443,7 @@ function scheduleNextRun() {
   }
   
   setTimeout(() => {
-    log('🚀 Starting scheduled Meydan population run...', 'info');
+    log(`🚀 Starting scheduled ${ACTIVE_TENANT} population run...`, 'info');
     runService();
   }, intervalMs);
 }
@@ -450,12 +452,12 @@ function scheduleNextRun() {
 function initializeLogFile() {
   const header = `
 =========================================
-MEYDAN AGENT DATABASE POPULATE SERVICE STARTED
+APR AGENT DATABASE POPULATE SERVICE STARTED
 =========================================
 Date: ${new Date().toISOString()}
 Interval: ${config.intervalMinutes} minutes
 Lookback: ${config.lookbackHours} hours
-Tenant: ${process.env.TENANT || 'meydan'}
+Tenant: ${ACTIVE_TENANT}
 =========================================
 `;
   
@@ -484,18 +486,18 @@ log(`Service configured with: ${config.intervalMinutes} minute intervals (no loo
     config: {
       intervalMinutes: config.intervalMinutes,
       lookbackHours: config.lookbackHours,
-      tenant: process.env.TENANT || 'meydan'
+      tenant: ACTIVE_TENANT
     }
   });
   
   // Start the service
-  log('Starting initial Meydan agent database population run...');
+  log(`Starting initial ${ACTIVE_TENANT} agent database population run...`);
   await runService();
 })();
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
-  log('Received SIGINT. Shutting down Meydan populate service gracefully...', 'warning');
+  log(`Received SIGINT. Shutting down ${ACTIVE_TENANT} populate service gracefully...`, 'warning');
   updateStatusFile({
     status: 'stopped',
     reason: 'SIGINT received',
@@ -505,7 +507,7 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
-  log('Received SIGTERM. Shutting down Meydan populate service gracefully...', 'warning');
+  log(`Received SIGTERM. Shutting down ${ACTIVE_TENANT} populate service gracefully...`, 'warning');
   updateStatusFile({
     status: 'stopped',
     reason: 'SIGTERM received',
@@ -547,7 +549,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 export default {
-  populateMeydanDatabase,
+  populateTenantDatabase,
   config,
   log
 };

@@ -2,7 +2,7 @@
 // populate-service-hourly.js
 // Runs every hour on the hour (IST time) and fetches data for the previous completed hour
 // Populates data for ALL configured tenants in parallel
-// Usage: pm2 start populate-service-hourly.js --name ocube_apr_populate_hourly
+// Usage: pm2 start populate-service-hourly.js --name cogent_1hour_apr
 
 import dotenv from 'dotenv';
 import { populateAllTablesHourly } from './populate-final-hourly.js';
@@ -306,14 +306,14 @@ function calculateNextRunTime() {
 }
 
 // Main populate function
-async function populateOcubeDatabase() {
-  const runId = `Ocube-run-${Date.now()}`;
+async function populateHourlyDatabase() {
+  const runId = `hourly-apr-run-${Date.now()}`;
   const startTime = Date.now();
   
   try {
     log('');
     log('================================================================================');
-    log(`Starting Ocube population (Run ID: ${runId})...`);
+    log(`Starting hourly APR population (Run ID: ${runId})...`);
     log('⏰ Interval: Every hour on the hour');
     log('📊 Mode: Fetch previous completed hour');
     log('================================================================================');
@@ -342,7 +342,7 @@ async function populateOcubeDatabase() {
     
     // Step 4: Run the populate process for ALL tenants in parallel
     const allTenants = Object.keys(TENANT_CONFIG);
-    log(`Step 4: Running Ocube agent data population for ${allTenants.length} tenants...`);
+    log(`Step 4: Running APR agent data population for ${allTenants.length} tenants...`);
     log(`   Tenants: ${allTenants.join(', ')}`);
     log(`   Time Range: ${dbStartTime} → ${dbEndTime}`);
     
@@ -463,7 +463,7 @@ function scheduleNextRun() {
   
   setTimeout(async () => {
     log('🚀 Starting scheduled population run...');
-    await populateOcubeDatabase();
+    await populateHourlyDatabase();
     scheduleNextRun(); // Schedule the next run after this one completes
   }, msUntilNextHour);
 }
@@ -475,7 +475,7 @@ async function initializeService() {
   // Create log file header
   const header = `
 =========================================
-OCUBE POPULATE SERVICE - HOURLY ON THE HOUR
+APR POPULATE SERVICE - HOURLY ON THE HOUR
 =========================================
 Date: ${new Date().toISOString()}
 Interval: Every hour on the hour (IST time)
@@ -492,7 +492,7 @@ Total Tenants: ${allTenants.length}
   
   // Run initial population immediately
   log('Starting initial population run for all tenants...');
-  await populateOcubeDatabase();
+  await populateHourlyDatabase();
   
   // Schedule subsequent runs
   scheduleNextRun();

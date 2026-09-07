@@ -1,0 +1,26 @@
+{
+  "serviceStarted": "2026-09-07T11:14:56.973Z",
+  "status": "stopped",
+  "config": {
+    "intervalMinutes": 5
+  },
+  "lastUpdated": "2026-09-07T11:14:59.085Z",
+  "lastRun": "2026-09-07T11:14:57.875Z",
+  "duration": "0.90s",
+  "timeRange": {
+    "start": "07/09/2026, 04:00:00 pm",
+    "end": "07/09/2026, 05:00:00 pm",
+    "startTimestamp": 1788777000,
+    "endTimestamp": 1788780600
+  },
+  "recordsAdded": {
+    "agent_stats_hth": 10,
+    "agent_activity_hth": 0,
+    "agent_complete_hourly_hth": 10
+  },
+  "totalNewRecords": 20,
+  "nextRun": "2026-09-07T11:19:57.876Z",
+  "nextRunIST": "07/09/2026, 04:49:57 pm",
+  "reason": "SIGINT received",
+  "stoppedAt": "2026-09-07T11:14:59.084Z"
+}

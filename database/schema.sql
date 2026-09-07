@@ -1,8 +1,8 @@
 -- Enhanced Agent Reporting Database Schema with Hourly Time Slots
--- Updated for Meydan Agent Performance Reports with hourly-based data population
+-- Legacy shared-table schema for Agent Performance Reports.
 
-CREATE DATABASE IF NOT EXISTS agent_reports_meydan;
-USE agent_reports_meydan;
+CREATE DATABASE IF NOT EXISTS AGENT_REPORTS_COGENT;
+USE AGENT_REPORTS_COGENT;
 
 -- Table 1: Agent Stats (Enhanced with hourly time slots)
 -- Stores agent statistics data from the stats API with hourly granularity
@@ -174,5 +174,3 @@ ADD COLUMN custom_state_quality_feedback VARCHAR(20) DEFAULT '00:00:00' COMMENT 
 ADD COLUMN custom_state_query_cp VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Query CP duration',
 ADD COLUMN custom_state_query_cx VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Query CX duration',
 ADD COLUMN custom_state_setup VARCHAR(20) DEFAULT '00:00:00' COMMENT 'Custom State - Setup duration';
-
-
